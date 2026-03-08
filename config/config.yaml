@@ -1,0 +1,80 @@
+
+app:
+  name: "Pars Agent V5 (Pars Core)"
+  active_prompt: "prompts/Pars_1.txt"
+  version: "5.0.1"
+  timeout_minutes: 600
+  max_steps: 25
+  max_context_tokens: 40000
+  debug: true
+  work_dir: "."
+
+security:
+  level: "god_mode"
+  auto_patching: true
+
+brain:
+  primary:
+    provider: "ollama" 
+    base_url: "http://192.168.111.250:11434" 
+    model_name: "qwen3.5:4b" 
+    temperature: 0.7 
+    num_ctx: 8192 
+
+  secondary:
+    enabled: false
+    provider: "" 
+    base_url: "" 
+    model_name: "" 
+  
+  api_keys:
+    openai: "" 
+    gemini: "" 
+    ollama : ""
+    anthropic: "" 
+
+communication:
+  whatsapp:
+    enabled: true 
+    admin_phone: ""
+    database_path: "Pars_Wp.db" 
+
+system_tools:
+  - "sys_exec"
+  - "fs_read"
+  - "fs_list"
+  - "fs_write"
+  - "fs_delete"
+  - "dev_studio"
+  - "edit_python_tool"
+  - "delete_python_tool"
+
+kangal:
+  enabled: false                   
+  sensitivity_level: "balanced"    
+  watchdog_model: "qwen3:1.5b"     
+  watchdog_base_url: "http://localhost:11434"
+
+  notifications:
+    toast: true                    
+    terminal: true                 
+    whatsapp_critical: true        
+    whatsapp_suggestion: false     
+
+  tracked_apps:
+    - "Code.exe"                   # VSCode
+    - "chrome.exe"                 # Chrome
+    - "msedge.exe"                 # Edge
+    - "python.exe"                 # Python
+    - "go.exe"                     # Go
+    - "node.exe"                   # Node.js
+
+  quiet_hours:
+    enabled: false
+    start: "23:00"
+    end: "07:00"
+
+  rate_limit: 
+    max_suggestions_per_hour: 10
+    max_critical_per_hour: 50
+    cooldown_between_suggestions: 300
