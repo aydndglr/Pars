@@ -1,6 +1,7 @@
 // internal/db_manager/manager.go
-// 🚀 DÜZELTMELER: Absolute path fix, Logging, Error handling, Validation
-// ⚠️ DİKKAT: Tüm micro-DB'ler (pars_memory.db, wa.db, vb.) artık doğru yolda oluşturulacak
+// 🚀 DÜZELTME V2: Binary-Centric Path Resolution - Terminal CWD Sorunu Çözüldü
+// ⚠️ DİKKAT: Tüm micro-DB'ler artık binary'nin bulunduğu klasördeki /db klasöründe oluşacak
+// 📅 Oluşturulma: 2026-03-09 (Pars V5 Critical Fix #1)
 
 package db_manager
 
@@ -12,6 +13,7 @@ import (
 	"sync"
 	"time"
 	"context"
+	"strings"
 
 	"github.com/aydndglr/pars-agent-v3/internal/core/logger"
 	_ "modernc.org/sqlite" // CGO gerektirmeyen saf Go SQLite sürücüsü
@@ -23,16 +25,54 @@ const (
 	ConnMaxLifetime   = 1 * time.Hour
 )
 
+// 🆕 YENİ: Global BaseDir - Binary'nin fiziksel konumu
+var (
+	globalBaseDir string
+	baseDirOnce   sync.Once
+)
+
+// 🆕 YENİ: GetBaseDir - Binary'nin bulunduğu dizini döndür (Singleton)
+func GetBaseDir() string {
+	baseDirOnce.Do(func() {
+		// 1. Önce os.Executable() dene (derlenmiş binary için)
+		exePath, err := os.Executable()
+		if err == nil {
+			// go-build veya Temp klasöründe değilse (development check)
+			if !strings.Contains(filepath.ToSlash(exePath), "go-build") && 
+			   !strings.Contains(filepath.ToSlash(exePath), "Temp") {
+				globalBaseDir = filepath.Dir(exePath)
+				logger.Debug("📍 [DBManager] BaseDir (binary): %s", globalBaseDir)
+				return
+			}
+		}
+		
+		// 2. Fallback: Mevcut working directory (go run için)
+		wd, err := os.Getwd()
+		if err != nil {
+			wd = "."
+		}
+		globalBaseDir = wd
+		logger.Debug("📍 [DBManager] BaseDir (fallback): %s", globalBaseDir)
+	})
+	
+	return globalBaseDir
+}
+
+// 🆕 YENİ: SetBaseDir - Test amaçlı manuel BaseDir ayarla
+func SetBaseDir(path string) {
+	globalBaseDir = path
+	logger.Debug("🔧 [DBManager] BaseDir manuel ayarlandı: %s", path)
+}
+
 var (
 	// dbPool, açılan veritabanı bağlantılarını MUTLAK yoluna göre önbellekte tutar.
-	// 🚨 DÜZELTME: Relative path sorunu çözüldü - tüm yollar absolute'e çevrilir
 	dbPool = make(map[string]*sql.DB)
 	
 	// mu, eşzamanlı okuma/yazma (Concurrency) işlemlerinde bağlantı havuzunu koruyan kilittir.
 	mu sync.RWMutex
 )
 
-// 🆕 YENİ: normalizeDBPath - Veritabanı yolunu mutlak (absolute) hale getirir
+// 🆕 YENİ: normalizeDBPath - Veritabanı yolunu binary konumuna göre mutlak hale getirir
 func normalizeDBPath(dbPath string) (string, error) {
 	// Boş path kontrolü
 	if dbPath == "" {
@@ -44,20 +84,15 @@ func normalizeDBPath(dbPath string) (string, error) {
 		return filepath.Clean(dbPath), nil
 	}
 
-	// Relative path ise:
+	// 🚀 DEĞİŞİKLİK: os.Getwd() YERİNE GetBaseDir() kullan
+	baseDir := GetBaseDir()
+	
 	// 1. Önce clean yap (../, ./, vs. temizle)
 	cleanPath := filepath.Clean(dbPath)
 	
-	// 2. Absolute path'e çevir
-	absPath, err := filepath.Abs(cleanPath)
-	if err != nil {
-		// Fallback: Eğer Abs başarısız olursa, mevcut working directory ile birleştir
-		wd, wdErr := os.Getwd()
-		if wdErr != nil {
-			return "", fmt.Errorf("veritabanı yolu çözümlenemedi: %v (wd error: %v)", err, wdErr)
-		}
-		absPath = filepath.Join(wd, cleanPath)
-	}
+	// 2. Binary konumuna göre absolute path oluştur
+	// DB dosyaları artık binary'nin yanındaki /db klasöründe olacak
+	absPath := filepath.Join(baseDir, "db", filepath.Base(cleanPath))
 
 	// 3. Parent dizin var mı kontrol et (yoksa oluştur)
 	parentDir := filepath.Dir(absPath)
@@ -66,14 +101,16 @@ func normalizeDBPath(dbPath string) (string, error) {
 		// Hata olsa bile devam et, belki dizin zaten vardır
 	}
 
-	logger.Debug("🔍 [DBManager] Relative path '%s' -> Absolute: '%s'", dbPath, absPath)
+	logger.Debug("🔍 [DBManager] Relative path '%s' -> Absolute: '%s' (BaseDir: %s)", 
+		dbPath, absPath, baseDir)
+	
 	return absPath, nil
 }
 
 // GetDB: Belirtilen dosya yolundaki SQLite veritabanı için güvenli, sıralı ve yapılandırılmış bir bağlantı döndürür.
-// 🚨 DÜZELTME: dbPath otomatik olarak absolute path'e çevrilir, böylece farklı CWD'lerde aynı dosya kullanılır
+// 🚨 DÜZELTME: dbPath artık binary konumuna göre çözümlenir, CWD'den bağımsız
 func GetDB(dbPath string) (*sql.DB, error) {
-	// 🚨 DÜZELTME #1: Path'i normalize et (relative -> absolute)
+	// 🚨 DÜZELTME #1: Path'i normalize et (binary-centric)
 	absPath, err := normalizeDBPath(dbPath)
 	if err != nil {
 		logger.Error("❌ [DBManager] Path normalization hatası: %v", err)
@@ -202,4 +239,9 @@ func RemoveFromPool(dbPath string) bool {
 		return true
 	}
 	return false
+}
+
+// 🆕 YENİ: GetDBPath - Debug için bir DB'nin absolute yolunu döndür
+func GetDBPath(dbPath string) (string, error) {
+	return normalizeDBPath(dbPath)
 }

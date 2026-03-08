@@ -1,3 +1,8 @@
+// cmd/pars/runner.go
+// 🚀 DÜZELTME V3: Task Management Tools Registration Eklendi
+// ⚠️ DİKKAT: create_task, update_task_status, list_tasks, delete_task araçları artık aktif
+// 📅 Oluşturulma: 2026-03-09 (Pars V5 Critical Fix #8)
+
 package main
 
 import (
@@ -45,7 +50,7 @@ var streamHTTPClient = &http.Client{
 	Transport: &http.Transport{
 		MaxIdleConns:        100,
 		MaxIdleConnsPerHost: 10,
-		IdleConnTimeout:     5 * time.Minute, // ⚠️ 90sn → 5dk
+		IdleConnTimeout:     5 * time.Minute,
 		DisableKeepAlives:   false,
 	},
 }
@@ -54,16 +59,10 @@ var streamHTTPClient = &http.Client{
 // 🧠 SYSTEM KERNEL: DAEMON INITIALIZATION
 // =====================================================================
 func startDaemon() {
-	// 📍 ABSOLUTE PATH RESOLUTION: Pars'ın fiziki konumunu (Binary) sabitliyoruz.
-	var baseDir string
-	exePath, err := os.Executable()
-	// Eğer derlenmiş bir dosya ise (arka plan servisi) ve geçici bir go-build dizini değilse:
-	if err == nil && !strings.Contains(filepath.ToSlash(exePath), "go-build") && !strings.Contains(filepath.ToSlash(exePath), "Temp") {
-		baseDir = filepath.Dir(exePath)
-	} else {
-		// Geliştirme aşamasındaysa (go run) o anki çalışma dizinini al
-		baseDir, _ = os.Getwd()
-	}
+	// 🚀 DEĞİŞİKLİK #1: db_manager.GetBaseDir() kullan (merkezi path yönetimi)
+	baseDir := db_manager.GetBaseDir()
+	
+	logger.Info("📍 [Daemon] BaseDir: %s", baseDir)
 
 	configPath := filepath.Join(baseDir, "config", "config.yaml")
 	cfg, err := config.Load(configPath)
@@ -75,6 +74,7 @@ func startDaemon() {
 
 	// ---------------------------------------------------------
 	// 🗄️ VERİTABANI YOLLARI (MICRO-DB ARCHITECTURE)
+	// 🚀 DEĞİŞİKLİK #2: db_manager.GetDBPath() ile tutarlı path hesapla
 	// ---------------------------------------------------------
 	dbDir := filepath.Join(baseDir, "db")
 	os.MkdirAll(dbDir, 0755)
@@ -84,6 +84,13 @@ func startDaemon() {
 	docsPath := filepath.Join(dbDir, "pars_docs.db")
 	tasksPath := filepath.Join(dbDir, "pars_tasks.db")
 	waDBPath := filepath.Join(dbDir, "wa.db")
+
+	// 🚀 DEĞİŞİKLİK #3: DB yollarını logla (debug için)
+	logger.Debug("🗄️ [Daemon] DB Paths:")
+	logger.Debug("   - Memory: %s", memPath)
+	logger.Debug("   - Docs: %s", docsPath)
+	logger.Debug("   - Tasks: %s", tasksPath)
+	logger.Debug("   - WhatsApp: %s", waDBPath)
 
 	// ---------------------------------------------------------
 	// 📡 WHATSAPP BRIDGE & STEALTH MODE CHECKS
@@ -218,6 +225,46 @@ func startDaemon() {
 	for _, t := range nativeTools {
 		skillMgr.Register(t)
 		coding.RegisterToolToDB(pythonEnv.BaseDir, t.Name(), "native", t.Description(), "", t.Parameters(), false, "")
+	}
+
+	// ---------------------------------------------------------
+	// 🆕 YENİ: TASK MANAGEMENT TOOLS REGISTRATION
+	// ---------------------------------------------------------
+	logger.Info("📋 [Daemon] Task Management Tools register ediliyor...")
+	
+	// Task Management araçlarını oluştur ve register et
+	createTaskTool := network.NewCreateTaskTool(tasksPath)
+	updateTaskStatusTool := network.NewUpdateTaskStatusTool(tasksPath)
+	listTasksTool := network.NewListTasksTool(tasksPath)
+	deleteTaskTool := network.NewDeleteTaskTool(tasksPath)
+
+	// Skill Manager'a kaydet
+	if createTaskTool != nil {
+		skillMgr.Register(createTaskTool)
+		coding.RegisterToolToDB(pythonEnv.BaseDir, createTaskTool.Name(), "native", 
+			createTaskTool.Description(), "", createTaskTool.Parameters(), false, "")
+		logger.Success("✅ [Daemon] create_task tool kaydedildi")
+	}
+
+	if updateTaskStatusTool != nil {
+		skillMgr.Register(updateTaskStatusTool)
+		coding.RegisterToolToDB(pythonEnv.BaseDir, updateTaskStatusTool.Name(), "native", 
+			updateTaskStatusTool.Description(), "", updateTaskStatusTool.Parameters(), false, "")
+		logger.Success("✅ [Daemon] update_task_status tool kaydedildi")
+	}
+
+	if listTasksTool != nil {
+		skillMgr.Register(listTasksTool)
+		coding.RegisterToolToDB(pythonEnv.BaseDir, listTasksTool.Name(), "native", 
+			listTasksTool.Description(), "", listTasksTool.Parameters(), false, "")
+		logger.Success("✅ [Daemon] list_tasks tool kaydedildi")
+	}
+
+	if deleteTaskTool != nil {
+		skillMgr.Register(deleteTaskTool)
+		coding.RegisterToolToDB(pythonEnv.BaseDir, deleteTaskTool.Name(), "native", 
+			deleteTaskTool.Description(), "", deleteTaskTool.Parameters(), false, "")
+		logger.Success("✅ [Daemon] delete_task tool kaydedildi")
 	}
 
 	// ---------------------------------------------------------
@@ -398,7 +445,7 @@ Mesajında tespit ettiğin durumu açıkla ve ne yapması/ne yapman gerektiğini
 
 
 // =====================================================================
-// 💻 CLIENT UI: INTERACTIVE TERMINAL SESSION  /QWEN
+// 💻 CLIENT UI: INTERACTIVE TERMINAL SESSION
 // =====================================================================
 func startInteractiveCLI() { 
 	printFixedHeader()
@@ -455,9 +502,9 @@ func startInteractiveCLI() {
 				line := scanner.Text()
 				if strings.HasPrefix(line, "data: ") {
 					msg := strings.TrimPrefix(line, "data: ")
-					msg = strings.TrimSpace(msg)  // ← YENİ: Boşlukları temizle
+					msg = strings.TrimSpace(msg)
 					if msg == "" {
-						continue  // ← YENİ: Boş mesajları atla
+						continue
 					}
 					if strings.HasPrefix(msg, "TOKEN::") {
 						token := strings.TrimPrefix(msg, "TOKEN::")
@@ -465,7 +512,6 @@ func startInteractiveCLI() {
 						lastTokenTime = time.Now()
 						tokenCount++
 					} else {
-						// ← YENİ: Final mesajı daha görünür yap
 						fmt.Printf("\n\n\033[36m[🐯]:\033[0m %s\n", msg)
 						finalMessageReceived = true
 					}
@@ -483,7 +529,7 @@ func startInteractiveCLI() {
 			if finalMessageReceived {
 				remaining := 1500*time.Millisecond - time.Since(lastTokenTime)
 				if remaining > 0 {
-					time.Sleep(remaining) // ← Buffer'ın boşalmasını bekle
+					time.Sleep(remaining)
 				}
 			}
 

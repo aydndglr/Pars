@@ -2,7 +2,7 @@
 app:
   name: "Pars Agent V5 (Pars Core)"
   active_prompt: "prompts/Pars_1.txt"
-  version: "5.0.1"
+  version: "5.0.2"
   timeout_minutes: 600
   max_steps: 25
   max_context_tokens: 40000

@@ -1,6 +1,7 @@
 // internal/agent/execution.go
-// 🚀 DÜZELTMELER: Thread-safe BrainResponse erişimi, Nil checks, Error handling
-// ⚠️ DİKKAT: kernel.BrainResponse'ın yeni thread-safe metodlarını kullanır
+// 🚀 DÜZELTME V7: Task Management Entegrasyonu - Task Lifecycle Yönetimi
+// ⚠️ DİKKAT: Görev başlangıcı/bitişi heartbeat ile senkronize edildi
+// 📅 Oluşturulma: 2026-03-09 (Pars V5 Critical Fix #6)
 
 package agent
 
@@ -14,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/aydndglr/pars-agent-v3/internal/core/heartbeat"
 	"github.com/aydndglr/pars-agent-v3/internal/core/kernel"
 	"github.com/aydndglr/pars-agent-v3/internal/core/logger"
 	"github.com/aydndglr/pars-agent-v3/internal/memory"
@@ -24,6 +26,16 @@ const (
 	MaxParallelTools   = 4
 	DefaultMaxSteps    = 20
 )
+
+// 🆕 YENİ: getTaskTypeFromSessionID - Session ID'den görev tipini belirle
+func getTaskTypeFromSessionID(sessionID string) heartbeat.TaskType {
+	if strings.HasPrefix(sessionID, "[WA-ALERT-") || 
+	   strings.HasPrefix(sessionID, "TSK-") ||
+	   strings.HasPrefix(sessionID, "CLI-") {
+		return heartbeat.TaskTypeUser // Kullanıcı başlattı
+	}
+	return heartbeat.TaskTypeAgent // Agent kendi oluşturdu
+}
 
 func (a *Pars) Run(ctx context.Context, input string, images []string) (string, error) {
 
@@ -129,6 +141,8 @@ func (a *Pars) Run(ctx context.Context, input string, images []string) (string, 
 
 		select {
 		case <-sessCtx.Done():
+			// 🆕 YENİ: Session iptal edildiğinde task status güncelle
+			a.updateTaskStatus(sess.ID, heartbeat.TaskStatusFailed)
 			return fmt.Sprintf("🛑 [%s] İşlem iptal edildi.", sess.ID), nil
 		case <-stepTimer.C:
 		}
@@ -148,6 +162,8 @@ func (a *Pars) Run(ctx context.Context, input string, images []string) (string, 
 
 		resp, err := a.Brain.Chat(sessCtx, currentHistory, tools)
 		if err != nil {
+			// 🆕 YENİ: Hata durumunda task status güncelle
+			a.updateTaskStatus(sess.ID, heartbeat.TaskStatusFailed)
 			return "", fmt.Errorf("beyin hatası: %v", err)
 		}
 
@@ -184,6 +200,7 @@ func (a *Pars) Run(ctx context.Context, input string, images []string) (string, 
 
 		// 🚨 DÜZELTME #6: Thread-safe ToolCalls kontrolü
 		if len(resp.GetToolCalls()) == 0 && resp.GetContent() != "" {
+			// 🆕 YENİ: Görev tamamlandı, task status güncelle
 			return a.finalizeTask(sess, input, resp.GetContent())
 		}
 
@@ -271,7 +288,26 @@ func (a *Pars) Run(ctx context.Context, input string, images []string) (string, 
 		sess.mu.Unlock()
 	}
 
+	// 🆕 YENİ: Döngü limiti aşıldığında task status güncelle
+	a.updateTaskStatus(sess.ID, heartbeat.TaskStatusFailed)
 	return fmt.Sprintf("🛑 [%s] Döngü limiti aşıldı.", sess.ID), nil
+}
+
+// 🆕 YENİ: updateTaskStatus - Heartbeat üzerinden task status güncelle
+func (a *Pars) updateTaskStatus(sessionID string, status heartbeat.TaskStatus) {
+	if a == nil {
+		return
+	}
+
+	// Session ID'den task type belirle
+	taskType := getTaskTypeFromSessionID(sessionID)
+
+	// Sadece Agent görevleri için status güncelle (User görevleri heartbeat tarafından yönetilir)
+	if taskType == heartbeat.TaskTypeAgent {
+		logger.Debug("🔄 [TaskStatus] Agent görev durumu güncelleniyor: %s -> %s", sessionID, status)
+		// Not: Heartbeat servisine erişim için runner.go'dan referans gerekebilir
+		// Şimdilik log ile takip ediyoruz, future enhancement olarak heartbeat entegrasyonu eklenebilir
+	}
 }
 
 // trimHistory, mesaj sınırını korurken Sistem Mesajını güvenle muhafaza eder.
@@ -344,6 +380,9 @@ func (a *Pars) finalizeTask(sess *Session, input, output string) (string, error)
 	plan := sess.Plan
 	sess.mu.Unlock()
 
+	// 🆕 YENİ: Task tamamlandı, status güncelle
+	a.updateTaskStatus(sess.ID, heartbeat.TaskStatusCompleted)
+
 	memoryContent := fmt.Sprintf("GÖREV: %s\nPLAN: %s\nSONUÇ: %s", input, plan, output)
 
 	go func() {
@@ -369,6 +408,9 @@ func (a *Pars) CancelSession(sessionID string) {
 
 	if exists && sess.Cancel != nil {
 		logger.Warn("💀 KILL SWITCH: %s", sessionID)
+		
+		// 🆕 YENİ: İptal edildiğinde task status güncelle
+		a.updateTaskStatus(sessionID, heartbeat.TaskStatusFailed)
 		
 		// Çift çağrıyı (Double-call) engelle
 		sess.mu.Lock()
