@@ -580,27 +580,27 @@ app:
 ## 📄 Lisans / License
 
 ```
-MIT License
+ÖZEL LİSANS SÖZLEŞMESİ (TİCARİ KULLANIM YASAKTIR)
 
-Copyright (c) 2026 Pars Agent
+Telif Hakkı (c) 2026 Aydın Dağlar (aydndglr)
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+Bu yazılımın (P.A.R.S. Agent) ve ilişkili dokümantasyon dosyalarının ("Yazılım") kaynak kodları, açık kaynak topluluğunun incelemesi, eğitim amaçlı kullanımı ve bireysel olarak test edilmesi amacıyla herkese açık olarak yayınlanmıştır.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+Aşağıdaki şartlara uyulduğu sürece Yazılımı test etmek, incelemek ve kişisel/bireysel amaçlarla kullanmak SERBESTTİR.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+Ancak, Yazılım sahibinin (Aydın Dağlar) önceden alınmış yazılı izni OLMASIZIN Yazılımın veya herhangi bir parçasının:
+1. Ticari bir ürüne veya hizmete entegre edilmesi,
+2. Doğrudan veya dolaylı yoldan gelir elde etmek amacıyla kullanılması,
+3. Kurumsal şirket ağlarında veya ticari operasyonlarda kullanılması,
+4. Ticari amaçla çoğaltılması, dağıtılması veya satılması
+
+KESİNLİKLE YASAKTIR.
+
+Bu proje, sahibinin portföy sunumu, siber güvenlik araştırmaları ve topluluğun bireysel deneyimi için paylaşılmıştır. İzinsiz ticari kullanım durumunda, ilgili telif hakkı ve fikri mülkiyet kanunları kapsamında yasal işlem başlatılacaktır.
+
+Yazılım "olduğu gibi" sağlanmış olup, kullanımından doğacak hiçbir riskten geliştirici sorumlu tutulamaz.
+
+HER HAKKI SAKLIDIR.
 ```
 
 ---
