@@ -1,12 +1,6 @@
-// internal/skills/kangal/error_detector.go
-// 🚀 KANGAL - ERROR DETECTOR (Hata Tespit Motoru)
-// 📅 Oluşturulma: 2026-03-07 (Pars V5 - Kangal Edition)
-// ⚠️ DİKKAT: Terminal output, Event Log ve Process crash'leri izler
-
 package kangal
 
 import (
-	//"bufio"
 	"context"
 	"fmt"
 	"os/exec"
@@ -20,26 +14,18 @@ import (
 	"github.com/shirou/gopsutil/v3/process"
 )
 
-// ========================================================================
-// 🚨 HATA PATTERN'LERİ (Error Patterns)
-// ========================================================================
-// ErrorPattern: Bilinen hata tiplerini ve çözüm önerilerini tanımlar
 type ErrorPattern struct {
-	ID           string   // Benzersiz pattern ID
-	Name         string   // İnsan dostu isim
-	Keywords     []string // Anahtar kelimeler (case-insensitive match)
-	Regex        *regexp.Regexp // Regex pattern (daha hassas eşleşme)
-	Severity     string   // "critical", "warning", "info"
-	Category     string   // "dll", "crash", "timeout", "permission", "network"
-	Suggestion   string   // Kullanıcıya gösterilecek çözüm önerisi
-	AutoFixCmd   string   // Otomatik düzeltme komutu (opsiyonel)
-	Enabled      bool     // Pattern aktif mi?
+	ID           string  
+	Name         string  
+	Keywords     []string 
+	Regex        *regexp.Regexp
+	Severity     string   
+	Category     string   
+	Suggestion   string   
+	AutoFixCmd   string   
+	Enabled      bool    
 }
 
-// ========================================================================
-// 📦 ERROR DETECTOR YAPISI
-// ========================================================================
-// ErrorDetector: Sistem hatalarını tespit eden ve sınıflandıran modül
 type ErrorDetector struct {
 	Config        *config.KangalConfig
 	EventChan     chan<- string
@@ -47,36 +33,26 @@ type ErrorDetector struct {
 	cancel        context.CancelFunc
 	isRunning     bool
 	mu            sync.RWMutex
-	
-	// Pattern DB
 	patterns      []ErrorPattern
 	patternMu     sync.RWMutex
-	
-	// Son tespit edilen hatalar (cache)
 	lastErrors    []DetectedError
 	lastErrorMu   sync.RWMutex
-	
-	// Rate limiting
-	alertTracker  map[string]time.Time // Hata ID -> Son uyarı zamanı
+	alertTracker  map[string]time.Time 
 	alertMu       sync.RWMutex
-	
-	// İstatistikler
 	stats         ErrorStats
 	statsMu       sync.RWMutex
 }
 
-// DetectedError: Tespit edilen hata bilgisi
 type DetectedError struct {
 	ID          string
 	PatternID   string
 	Message     string
-	Source      string // "terminal", "eventlog", "process"
+	Source      string
 	Severity    string
 	Timestamp   time.Time
-	Context     map[string]interface{} // Ek bağlam bilgisi
+	Context     map[string]interface{}
 }
 
-// ErrorStats: Hata istatistikleri
 type ErrorStats struct {
 	TotalDetected    int
 	CriticalCount    int
@@ -85,12 +61,8 @@ type ErrorStats struct {
 	TopCategories    map[string]int
 }
 
-// ========================================================================
-// 🆕 YENİ: ErrorDetector Oluşturucu
-// ========================================================================
-// NewErrorDetector: Yeni hata tespit motoru oluşturur
+
 func NewErrorDetector(ctx context.Context, cfg *config.KangalConfig, eventChan chan<- string) *ErrorDetector {
-	// 🚨 DÜZELTME #1: Nil kontrolleri
 	if cfg == nil {
 		logger.Error("❌ [ErrorDetector] Config nil! ErrorDetector oluşturulamadı.")
 		return nil
@@ -116,20 +88,13 @@ func NewErrorDetector(ctx context.Context, cfg *config.KangalConfig, eventChan c
 		},
 	}
 	
-	// 🚀 Pattern DB'yi başlat
 	detector.initPatterns()
 	
 	return detector
 }
 
-// ========================================================================
-// 🚨 PATTERN DB INIT
-// ========================================================================
-// initPatterns: Bilinen hata pattern'lerini yükler
 func (d *ErrorDetector) initPatterns() {
-	// 🚨 DÜZELTME #2: Pattern DB'yi doldur
 	d.patterns = []ErrorPattern{
-		// 1. DLL Hataları (Windows)
 		{
 			ID:       "dll_missing",
 			Name:     "Eksik DLL Dosyası",
@@ -141,7 +106,6 @@ func (d *ErrorDetector) initPatterns() {
 			AutoFixCmd: "winget install Microsoft.VCRedist.2015+.x64",
 			Enabled:  true,
 		},
-		// 2. Process Crash
 		{
 			ID:       "process_crash",
 			Name:     "Uygulama Çökmesi",
@@ -153,7 +117,6 @@ func (d *ErrorDetector) initPatterns() {
 			AutoFixCmd: "",
 			Enabled:  true,
 		},
-		// 3. Timeout Hataları
 		{
 			ID:       "timeout",
 			Name:     "Zaman Aşımı",
@@ -165,7 +128,6 @@ func (d *ErrorDetector) initPatterns() {
 			AutoFixCmd: "",
 			Enabled:  true,
 		},
-		// 4. Permission Denied
 		{
 			ID:       "permission",
 			Name:     "Erişim İzni Hatası",
@@ -177,7 +139,6 @@ func (d *ErrorDetector) initPatterns() {
 			AutoFixCmd: "",
 			Enabled:  true,
 		},
-		// 5. Network Errors
 		{
 			ID:       "network",
 			Name:     "Ağ Bağlantı Hatası",
@@ -189,7 +150,6 @@ func (d *ErrorDetector) initPatterns() {
 			AutoFixCmd: "",
 			Enabled:  true,
 		},
-		// 6. Python Errors
 		{
 			ID:       "python_error",
 			Name:     "Python Hatası",
@@ -201,7 +161,6 @@ func (d *ErrorDetector) initPatterns() {
 			AutoFixCmd: "pip install -r requirements.txt",
 			Enabled:  true,
 		},
-		// 7. Go Errors
 		{
 			ID:       "go_error",
 			Name:     "Go Derleme Hatası",
@@ -213,7 +172,6 @@ func (d *ErrorDetector) initPatterns() {
 			AutoFixCmd: "",
 			Enabled:  true,
 		},
-		// 8. Disk Space
 		{
 			ID:       "disk_space",
 			Name:     "Disk Dolu Hatası",
@@ -225,7 +183,6 @@ func (d *ErrorDetector) initPatterns() {
 			AutoFixCmd: "",
 			Enabled:  true,
 		},
-		// 9. Memory Errors
 		{
 			ID:       "memory",
 			Name:     "Bellek Hatası",
@@ -237,7 +194,6 @@ func (d *ErrorDetector) initPatterns() {
 			AutoFixCmd: "",
 			Enabled:  true,
 		},
-		// 10. Generic Error
 		{
 			ID:       "generic_error",
 			Name:     "Genel Hata",
@@ -254,10 +210,6 @@ func (d *ErrorDetector) initPatterns() {
 	logger.Success("✅ [ErrorDetector] %d hata pattern'i yüklendi", len(d.patterns))
 }
 
-// ========================================================================
-// 🚀 BAŞLATMA / DURDURMA
-// ========================================================================
-// Start: Error Detector'ı başlatır
 func (d *ErrorDetector) Start() error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -267,18 +219,14 @@ func (d *ErrorDetector) Start() error {
 		return nil
 	}
 	
-	// 🚨 DÜZELTME #3: Config enabled kontrolü
 	if !d.Config.Enabled {
 		logger.Debug("ℹ️ [ErrorDetector] Config'de disabled, başlatılmadı")
 		return nil
 	}
 	
-	// Context oluştur
 	d.ctx, d.cancel = context.WithCancel(context.Background())
 	
 	d.isRunning = true
-	
-	// Arka planda izleme goroutine'lerini başlat
 	go d.monitorEventLog()
 	go d.monitorProcessCrashes()
 	
@@ -286,7 +234,6 @@ func (d *ErrorDetector) Start() error {
 	return nil
 }
 
-// Stop: Error Detector'ı güvenli şekilde durdurur
 func (d *ErrorDetector) Stop() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -306,15 +253,8 @@ func (d *ErrorDetector) Stop() {
 	logger.Success("✅ [ErrorDetector] Hata tespit motoru durduruldu")
 }
 
-// ========================================================================
-// 🔍 İZLEME GOROUTINE'LERİ
-// ========================================================================
-// monitorEventLog: Windows Event Log'u izler (hata event'leri için)
 func (d *ErrorDetector) monitorEventLog() {
-	// Sadece Windows'ta çalışır
-	// Linux'ta journalctl kullanılabilir (future enhancement)
-	
-	ticker := time.NewTicker(30 * time.Second) // Her 30 saniye kontrol
+	ticker := time.NewTicker(30 * time.Second) 
 	defer ticker.Stop()
 	
 	logger.Debug("🔍 [ErrorDetector] Event Log monitor başlatıldı")
@@ -330,22 +270,17 @@ func (d *ErrorDetector) monitorEventLog() {
 	}
 }
 
-// checkWindowsEventLog: Windows Event Log'dan son hataları çeker
 func (d *ErrorDetector) checkWindowsEventLog() {
-	// 🚨 DÜZELTME #4: PowerShell ile Event Log sorgula
 	cmd := exec.CommandContext(d.ctx, "powershell", "-NoProfile", "-Command",
 		`Get-WinEvent -FilterHashtable @{LogName='Application'; Level=1,2,3; StartTime=(Get-Date).AddSeconds(-30)} -MaxEvents 5 -ErrorAction SilentlyContinue | Select-Object -Property TimeCreated,Message,LevelDisplayName,ProviderName | ConvertTo-Json`)
 	
 	output, err := cmd.Output()
 	if err != nil {
-		// Event Log erişimi yoksa sessizce geç (her sistemde yönetici yok)
 		return
 	}
 	
-	// Output'u parse et (basit string search)
 	outputStr := string(output)
 	
-	// Her pattern'i test et
 	d.patternMu.RLock()
 	for _, pattern := range d.patterns {
 		if !pattern.Enabled {
@@ -367,12 +302,9 @@ func (d *ErrorDetector) checkWindowsEventLog() {
 	d.patternMu.RUnlock()
 }
 
-// monitorProcessCrashes: Çöken process'leri izler
 func (d *ErrorDetector) monitorProcessCrashes() {
-	ticker := time.NewTicker(10 * time.Second) // Her 10 saniye kontrol
+	ticker := time.NewTicker(10 * time.Second) 
 	defer ticker.Stop()
-	
-	// Bilinen process'leri takip et
 	trackedPIDs := make(map[int32]bool)
 	
 	logger.Debug("🔍 [ErrorDetector] Process Crash monitor başlatıldı")
@@ -388,10 +320,8 @@ func (d *ErrorDetector) monitorProcessCrashes() {
 				continue
 			}
 			
-			// Yeni process'leri takip et
 			for _, p := range procs {
 				if !trackedPIDs[p.Pid] {
-					// Process adı tracked apps listesinde mi?
 					name, _ := p.Name()
 					if d.isTrackedProcess(name) {
 						trackedPIDs[p.Pid] = true
@@ -399,11 +329,9 @@ func (d *ErrorDetector) monitorProcessCrashes() {
 				}
 			}
 			
-			// Kayıp process'leri kontrol et (crash olmuş olabilir)
 			for pid := range trackedPIDs {
 				exists, _ := process.PidExists(pid)
 				if !exists {
-					// Process kayıp! Crash olmuş olabilir
 					d.handleDetectedError(DetectedError{
 						ID:        fmt.Sprintf("crash_%d_%d", pid, time.Now().UnixNano()),
 						PatternID: "process_crash",
@@ -420,17 +348,11 @@ func (d *ErrorDetector) monitorProcessCrashes() {
 	}
 }
 
-// ========================================================================
-// 🎯 PATTERN MATCHING
-// ========================================================================
-// matchPattern: Metni pattern ile eşleştirir
 func (d *ErrorDetector) matchPattern(text string, pattern ErrorPattern) bool {
-	// 🚨 DÜZELTME #5: Önce regex dene (daha hassas)
 	if pattern.Regex != nil && pattern.Regex.MatchString(text) {
 		return true
 	}
 	
-	// Sonra keyword search (case-insensitive)
 	textLower := strings.ToLower(text)
 	for _, keyword := range pattern.Keywords {
 		if strings.Contains(textLower, strings.ToLower(keyword)) {
@@ -441,10 +363,9 @@ func (d *ErrorDetector) matchPattern(text string, pattern ErrorPattern) bool {
 	return false
 }
 
-// isTrackedProcess: Process izlenenler listesinde mi?
 func (d *ErrorDetector) isTrackedProcess(processName string) bool {
 	if len(d.Config.TrackedApps) == 0 {
-		return true // Liste boşsa tüm process'leri izle
+		return true 
 	}
 	
 	for _, app := range d.Config.TrackedApps {
@@ -456,30 +377,19 @@ func (d *ErrorDetector) isTrackedProcess(processName string) bool {
 	return false
 }
 
-// ========================================================================
-// 🚨 HATA İŞLEME
-// ========================================================================
-// handleDetectedError: Tespit edilen hatayı işler
 func (d *ErrorDetector) handleDetectedError(err DetectedError) {
-	// 🚨 DÜZELTME #6: Rate limiting kontrolü
 	if !d.canAlert(err.PatternID) {
 		logger.Debug("⏱️ [ErrorDetector] Rate limit nedeniyle alert atlandı: %s", err.PatternID)
 		return
 	}
 	
-	// 🚨 DÜZELTME #7: Son hatalar cache'ine ekle
 	d.lastErrorMu.Lock()
 	d.lastErrors = append(d.lastErrors, err)
-	// Son 100 hatayı tut
 	if len(d.lastErrors) > 100 {
 		d.lastErrors = d.lastErrors[1:]
 	}
 	d.lastErrorMu.Unlock()
-	
-	// 🚨 DÜZELTME #8: İstatistikleri güncelle
 	d.updateStats(err)
-	
-	// 🚨 DÜZELTME #9: Severity'ye göre action al
 	switch err.Severity {
 	case "critical":
 		logger.Error("🚨 [ErrorDetector] KRİTİK HATA: %s (%s)", err.PatternID, err.Source)
@@ -493,13 +403,10 @@ func (d *ErrorDetector) handleDetectedError(err DetectedError) {
 	}
 }
 
-// canAlert: Rate limiting kontrolü (aynı hata çok sık alert göndermesin)
 func (d *ErrorDetector) canAlert(patternID string) bool {
 	d.alertMu.Lock()
 	defer d.alertMu.Unlock()
-	
-	// Cooldown süresi (severity'ye göre)
-	cooldown := 5 * time.Minute // Varsayılan
+	cooldown := 5 * time.Minute
 	
 	if lastAlert, exists := d.alertTracker[patternID]; exists {
 		if time.Since(lastAlert) < cooldown {
@@ -511,18 +418,12 @@ func (d *ErrorDetector) canAlert(patternID string) bool {
 	return true
 }
 
-// updateStats: İstatistikleri güncelle
 func (d *ErrorDetector) updateStats(err DetectedError) {
 	d.statsMu.Lock()
 	defer d.statsMu.Unlock()
-	
 	d.stats.TotalDetected++
 	d.stats.LastHourCount++
-	
-	// Category say
 	d.stats.TopCategories[err.PatternID]++
-	
-	// Severity say
 	if err.Severity == "critical" {
 		d.stats.CriticalCount++
 	} else if err.Severity == "warning" {
@@ -530,19 +431,13 @@ func (d *ErrorDetector) updateStats(err DetectedError) {
 	}
 }
 
-// ========================================================================
-// 📢 ALERT GÖNDERME
-// ========================================================================
-// sendCriticalAlert: Kritik hata alert'i gönderir
 func (d *ErrorDetector) sendCriticalAlert(err DetectedError) {
-	// 🚨 DÜZELTME #10: Pattern'den suggestion al
 	pattern := d.getPattern(err.PatternID)
 	suggestion := "Hata tespit edildi. Detaylı analiz başlatıyorum..."
 	if pattern != nil {
 		suggestion = pattern.Suggestion
 	}
 	
-	// EventChan'a gönder (Kangal ana modülü işleyecek)
 	alertMsg := fmt.Sprintf("🚨 [KRİTİK HATA] %s\n\n%s\n\n⏰ Zaman: %s",
 		pattern.Name,
 		suggestion,
@@ -556,7 +451,6 @@ func (d *ErrorDetector) sendCriticalAlert(err DetectedError) {
 	}
 }
 
-// sendWarningAlert: Uyarı alert'i gönderir
 func (d *ErrorDetector) sendWarningAlert(err DetectedError) {
 	pattern := d.getPattern(err.PatternID)
 	suggestion := "Uyarı tespit edildi."
@@ -576,12 +470,10 @@ func (d *ErrorDetector) sendWarningAlert(err DetectedError) {
 	}
 }
 
-// logInfo: Bilgi seviyesindeki hataları sadece logla
 func (d *ErrorDetector) logInfo(err DetectedError) {
 	logger.Debug("📝 [ErrorDetector] Hata loglandı: %s", err.PatternID)
 }
 
-// getPattern: Pattern ID'den pattern bul
 func (d *ErrorDetector) getPattern(patternID string) *ErrorPattern {
 	d.patternMu.RLock()
 	defer d.patternMu.RUnlock()
@@ -595,17 +487,12 @@ func (d *ErrorDetector) getPattern(patternID string) *ErrorPattern {
 	return nil
 }
 
-// ========================================================================
-// 🎯 PUBLIC API
-// ========================================================================
-// IsRunning: Error Detector'ın çalışıp çalışmadığını döndür
 func (d *ErrorDetector) IsRunning() bool {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	return d.isRunning
 }
 
-// GetStatus: Error Detector durum raporunu döndür
 func (d *ErrorDetector) GetStatus() map[string]interface{} {
 	d.mu.RLock()
 	d.statsMu.RLock()
@@ -631,7 +518,6 @@ func (d *ErrorDetector) GetStatus() map[string]interface{} {
 	}
 }
 
-// getEnabledPatternCount: Aktif pattern sayısını döndür
 func (d *ErrorDetector) getEnabledPatternCount() int {
 	count := 0
 	for _, p := range d.patterns {
@@ -642,24 +528,20 @@ func (d *ErrorDetector) getEnabledPatternCount() int {
 	return count
 }
 
-// SetSensitivity: Hassasiyet seviyesini değiştir (runtime'da)
 func (d *ErrorDetector) SetSensitivity(level string) {
 	d.patternMu.Lock()
 	defer d.patternMu.Unlock()
 	
 	switch level {
 	case "low":
-		// Sadece critical pattern'leri aktif et
 		for i := range d.patterns {
 			d.patterns[i].Enabled = (d.patterns[i].Severity == "critical")
 		}
 	case "balanced":
-		// Critical ve warning'leri aktif et
 		for i := range d.patterns {
 			d.patterns[i].Enabled = (d.patterns[i].Severity == "critical" || d.patterns[i].Severity == "warning")
 		}
 	case "high":
-		// Tüm pattern'leri aktif et
 		for i := range d.patterns {
 			d.patterns[i].Enabled = true
 		}
@@ -671,17 +553,12 @@ func (d *ErrorDetector) SetSensitivity(level string) {
 	logger.Debug("🔧 [ErrorDetector] Sensitivity değiştirildi: %s", level)
 }
 
-// ========================================================================
-// 🔧 HELPER FONKSİYONLAR
-// ========================================================================
-// ProcessTerminalError: Terminal'den gelen hataları işler (external call için)
 func (d *ErrorDetector) ProcessTerminalError(data map[string]interface{}) {
 	msg, ok := data["message"].(string)
 	if !ok || msg == "" {
 		return
 	}
 	
-	// Her pattern'i test et
 	d.patternMu.RLock()
 	for _, pattern := range d.patterns {
 		if !pattern.Enabled {
@@ -698,13 +575,12 @@ func (d *ErrorDetector) ProcessTerminalError(data map[string]interface{}) {
 				Timestamp: time.Now(),
 				Context:   data,
 			})
-			break // İlk eşleşen pattern yeterli
+			break 
 		}
 	}
 	d.patternMu.RUnlock()
 }
 
-// ProcessCrash: Process crash bilgisini işler (external call için)
 func (d *ErrorDetector) ProcessCrash(data map[string]interface{}) {
 	pid, ok := data["pid"].(int32)
 	if !ok {
@@ -722,13 +598,11 @@ func (d *ErrorDetector) ProcessCrash(data map[string]interface{}) {
 	})
 }
 
-// TriggerScan: Manuel tarama tetikle (debug/test için)
 func (d *ErrorDetector) TriggerScan() {
 	logger.Debug("🔍 [ErrorDetector] Manuel tarama tetiklendi")
 	d.checkWindowsEventLog()
 }
 
-// GetLastErrors: Son tespit edilen hataları döndür
 func (d *ErrorDetector) GetLastErrors(limit int) []DetectedError {
 	d.lastErrorMu.RLock()
 	defer d.lastErrorMu.RUnlock()
@@ -737,7 +611,6 @@ func (d *ErrorDetector) GetLastErrors(limit int) []DetectedError {
 		limit = len(d.lastErrors)
 	}
 	
-	// Son 'limit' hatayı döndür
 	start := len(d.lastErrors) - limit
 	if start < 0 {
 		start = 0
@@ -746,7 +619,6 @@ func (d *ErrorDetector) GetLastErrors(limit int) []DetectedError {
 	return d.lastErrors[start:]
 }
 
-// GetStats: İstatistikleri döndür
 func (d *ErrorDetector) GetStats() ErrorStats {
 	d.statsMu.RLock()
 	defer d.statsMu.RUnlock()
@@ -754,12 +626,9 @@ func (d *ErrorDetector) GetStats() ErrorStats {
 	return d.stats
 }
 
-// AddCustomPattern: Custom pattern ekle (runtime'da)
 func (d *ErrorDetector) AddCustomPattern(pattern ErrorPattern) {
 	d.patternMu.Lock()
 	defer d.patternMu.Unlock()
-	
-	// ID unique mi kontrol et
 	for _, p := range d.patterns {
 		if p.ID == pattern.ID {
 			logger.Warn("⚠️ [ErrorDetector] Pattern ID zaten var: %s", pattern.ID)
@@ -771,7 +640,6 @@ func (d *ErrorDetector) AddCustomPattern(pattern ErrorPattern) {
 	logger.Debug("➕ [ErrorDetector] Custom pattern eklendi: %s", pattern.ID)
 }
 
-// RemovePattern: Pattern çıkar (runtime'da)
 func (d *ErrorDetector) RemovePattern(patternID string) {
 	d.patternMu.Lock()
 	defer d.patternMu.Unlock()
@@ -785,7 +653,6 @@ func (d *ErrorDetector) RemovePattern(patternID string) {
 	}
 }
 
-// EnablePattern: Pattern'ı aktif/pasif yap
 func (d *ErrorDetector) EnablePattern(patternID string, enabled bool) {
 	d.patternMu.Lock()
 	defer d.patternMu.Unlock()

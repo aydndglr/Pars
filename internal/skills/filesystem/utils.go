@@ -21,17 +21,30 @@ func auditLog(operation, path, result string, fileSize int64, extraInfo string) 
 		timestamp, "FS", operation, path, result, fileSize, extraInfo)
 }
 
+// YENİ KOD (DÜZELTİLMİŞ)
 func ResolvePath(reqPath string) string {
-	if reqPath == "" || strings.ContainsRune(reqPath, '\x00') {
-		return "."
-	}
-	cleanPath := filepath.Clean(reqPath)
-	absPath, err := filepath.Abs(cleanPath)
-	if err != nil {
-		return cleanPath
-	}
-	if absPath == "/" || absPath == "\\" || absPath == "C:\\" || absPath == "c:\\" {
-		return "."
-	}
-	return absPath
+    if reqPath == "" || strings.ContainsRune(reqPath, '\x00') {
+        return "."
+    }
+    
+    cleanPath := filepath.Clean(reqPath)
+    
+    // 🚨 YENİ: Absolute path kontrolü (Windows/Linux)
+    if filepath.IsAbs(cleanPath) {
+        // Zaten absolute path, direkt return et
+        return cleanPath
+    }
+    
+    // Relative path ise absolute'a çevir
+    absPath, err := filepath.Abs(cleanPath)
+    if err != nil {
+        return cleanPath
+    }
+    
+    // Root koruması
+    if absPath == "/" || absPath == "\\" || absPath == "C:\\" || absPath == "c:\\" {
+        return "."
+    }
+    
+    return absPath
 }

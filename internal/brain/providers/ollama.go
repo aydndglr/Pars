@@ -1,7 +1,3 @@
-// internal/brain/providers/ollama.go
-// 🚀 DÜZELTMELER: Memory leak fix, Buffer optimization, Error handling, Validation
-// ⚠️ DİKKAT: kernel.BrainResponse'ın thread-safe metodlarını kullanır
-
 package providers
 
 import (
@@ -18,20 +14,17 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aydndglr/pars-agent-v3/internal/core/config"
 	"github.com/aydndglr/pars-agent-v3/internal/core/kernel"
 	"github.com/aydndglr/pars-agent-v3/internal/core/logger"
 )
 
-// 🚨 YENİ: Buffer ve Limit Sabitleri
 const (
-	MaxScannerBufferSize = 10 * 1024 * 1024 // 10 MB (Büyük tool response'ları için)
-	MaxContentLength     = 500 * 1024       // 500 KB (LLM response limiti)
-	MaxImagesPerMessage  = 5                // Görsel sayısı limiti
-	MaxImageSize         = 10 * 1024 * 1024 // 10 MB (Görsel boyut limiti)
-	HTTPTimeout          = 600 * time.Second
+	MaxScannerBufferSize = 10 * 1024 * 1024
+	MaxImagesPerMessage  = 5
+	MaxImageSize         = 10 * 1024 * 1024
 )
 
-// OllamaProvider: Ollama API için istemci
 type OllamaProvider struct {
 	BaseURL     string
 	Model       string
@@ -41,13 +34,13 @@ type OllamaProvider struct {
 	Client      *http.Client
 }
 
-// NewOllama: Yeni Ollama sağlayıcı oluşturur
 func NewOllama(url, model string, temp float64, numCtx int, apiKey string) *OllamaProvider {
 	if numCtx == 0 {
-		numCtx = 8192 // Varsayılan context window
+		numCtx = 8192
 	}
 
-	// 🚨 DÜZELTME #1: HTTP Client timeout yapılandırması
+	logger.Debug("🔧 [Ollama] Provider oluşturuluyor: Model=%s, URL=%s, NumCtx=%d", model, url, numCtx)
+
 	return &OllamaProvider{
 		BaseURL:     strings.TrimSuffix(url, "/"),
 		Model:       model,
@@ -55,7 +48,7 @@ func NewOllama(url, model string, temp float64, numCtx int, apiKey string) *Olla
 		NumCtx:      numCtx,
 		APIKey:      apiKey,
 		Client: &http.Client{
-			Timeout: HTTPTimeout,
+			Timeout: config.LLMStreamTimeout,
 			Transport: &http.Transport{
 				MaxIdleConns:        100,
 				MaxIdleConnsPerHost: 10,
@@ -65,7 +58,6 @@ func NewOllama(url, model string, temp float64, numCtx int, apiKey string) *Olla
 	}
 }
 
-// -- Ollama Spesifik Araç Şeması --
 type ollamaTool struct {
 	Type     string `json:"type"`
 	Function struct {
@@ -75,7 +67,6 @@ type ollamaTool struct {
 	} `json:"function"`
 }
 
-// -- İstek Yapıları --
 type ollamaRequest struct {
 	Model     string                 `json:"model"`
 	Messages  []ollamaMessage        `json:"messages"`
@@ -106,9 +97,7 @@ type ollamaResponse struct {
 	EvalCount int           `json:"eval_count,omitempty"`
 }
 
-// Chat: LLM ile konuşur ve görselleri Ollama'nın sevdiği formata sokar
 func (o *OllamaProvider) Chat(ctx context.Context, history []kernel.Message, tools []kernel.Tool) (*kernel.BrainResponse, error) {
-	// 🚨 DÜZELTME #2: Nil ve input validation
 	if o == nil {
 		return nil, fmt.Errorf("ollama provider nil")
 	}
@@ -117,12 +106,13 @@ func (o *OllamaProvider) Chat(ctx context.Context, history []kernel.Message, too
 		return nil, fmt.Errorf("ollama base URL boş")
 	}
 
-	// 🚨 DÜZELTME #3: Content length limiti (Memory bloat önleme)
+	logger.Debug("🧠 [Ollama] Chat başlatılıyor: Model=%s, History=%d mesaj, Tools=%d adet", o.Model, len(history), len(tools))
+
 	totalChars := 0
 	for _, msg := range history {
 		totalChars += len(msg.Content)
 	}
-	if totalChars > MaxContentLength*2 {
+	if totalChars > config.LLMMaxContentLength*2 {
 		logger.Warn("⚠️ [Ollama] History çok büyük (%d karakter), ilk %d mesaj kullanılıyor", totalChars, len(history)/2)
 		history = history[len(history)/2:]
 	}
@@ -132,7 +122,6 @@ func (o *OllamaProvider) Chat(ctx context.Context, history []kernel.Message, too
 
 	var combinedSystemPrompt string
 
-	// 1. SİSTEM MESAJLARINI TOPLA
 	for _, msg := range history {
 		if msg.Role == "system" {
 			combinedSystemPrompt += msg.Content + "\n\n"
@@ -141,13 +130,11 @@ func (o *OllamaProvider) Chat(ctx context.Context, history []kernel.Message, too
 
 	lastUserMsgIndex := -1
 
-	// 2. MESAJLARI İŞLE
 	for _, msg := range history {
 		if msg.Role == "system" {
 			continue
 		}
 
-		// 🚨 DÜZELTME #4: Görsel sayısı limiti
 		var cleanedImages []string
 		imageCount := 0
 		for _, img := range msg.Images {
@@ -170,7 +157,6 @@ func (o *OllamaProvider) Chat(ctx context.Context, history []kernel.Message, too
 			Images:  cleanedImages,
 		}
 
-		// 🚨 DÜZELTME #5: Görsel dosya yolu yakalayıcı + boyut kontrolü
 		if msg.Content != "" {
 			matches := imagePathRegex.FindAllString(msg.Content, -1)
 			for _, match := range matches {
@@ -180,7 +166,6 @@ func (o *OllamaProvider) Chat(ctx context.Context, history []kernel.Message, too
 
 				resolvedPath := resolveMediaPath(match)
 
-				// 🚨 DÜZELTME #6: Dosya boyutu kontrolü
 				if info, err := os.Stat(resolvedPath); err == nil && info.Size() > MaxImageSize {
 					logger.Warn("⚠️ [Ollama] Görsel çok büyük (%d byte): %s", info.Size(), resolvedPath)
 					continue
@@ -190,11 +175,11 @@ func (o *OllamaProvider) Chat(ctx context.Context, history []kernel.Message, too
 				if err == nil {
 					b64Data := base64.StdEncoding.EncodeToString(imgData)
 					om.Images = append(om.Images, b64Data)
+					logger.Debug("🖼️ [Ollama] Görsel eklendi: %s -> %d bytes", match, len(imgData))
 				}
 			}
 		}
 
-		// Tool Output İşleme
 		if msg.Role == "tool" {
 			om.Role = "tool"
 			var responseData map[string]interface{}
@@ -206,7 +191,6 @@ func (o *OllamaProvider) Chat(ctx context.Context, history []kernel.Message, too
 			}
 		}
 
-		// Tool Call İşleme
 		if len(msg.ToolCalls) > 0 {
 			om.Role = "assistant"
 			for _, tc := range msg.ToolCalls {
@@ -217,6 +201,7 @@ func (o *OllamaProvider) Chat(ctx context.Context, history []kernel.Message, too
 					}{Name: tc.Function, Arguments: tc.Arguments},
 				})
 			}
+			logger.Debug("🛠️ [Ollama] Tool call eklendi: %d adet", len(msg.ToolCalls))
 		}
 
 		finalMessages = append(finalMessages, om)
@@ -226,7 +211,6 @@ func (o *OllamaProvider) Chat(ctx context.Context, history []kernel.Message, too
 		}
 	}
 
-	// 🚀 SİSTEM PROMPTUNU EN SON USER MESAJINA SABİTLE
 	if combinedSystemPrompt != "" {
 		systemHeader := "[SİSTEM ANAYASASI VE KİMLİĞİN - BUNA KESİNLİKLE UYACAKSIN]:\n" + strings.TrimSpace(combinedSystemPrompt) + "\n\n[GÜNCEL KULLANICI TALEBİ]:\n"
 
@@ -237,7 +221,6 @@ func (o *OllamaProvider) Chat(ctx context.Context, history []kernel.Message, too
 		}
 	}
 
-	// 3. İSTEĞİ HAZIRLA
 	reqBody := ollamaRequest{
 		Model:     o.Model,
 		Messages:  finalMessages,
@@ -250,12 +233,14 @@ func (o *OllamaProvider) Chat(ctx context.Context, history []kernel.Message, too
 		},
 	}
 
+	logger.Debug("📦 [Ollama] Tool schema hazırlanıyor: %d tool", len(tools))
 	for _, t := range tools {
 		ot := ollamaTool{Type: "function"}
 		ot.Function.Name = t.Name()
 		ot.Function.Description = t.Description()
 		ot.Function.Parameters = t.Parameters()
 		reqBody.Tools = append(reqBody.Tools, ot)
+		logger.Debug("🛠️ [Ollama] Tool eklendi: %s", t.Name())
 	}
 
 	jsonData, err := json.Marshal(reqBody)
@@ -263,49 +248,48 @@ func (o *OllamaProvider) Chat(ctx context.Context, history []kernel.Message, too
 		return nil, fmt.Errorf("JSON paketleme hatası: %v", err)
 	}
 
-	// URL oluşturma (405 Hatasını önlemek için token URL'ye eklenmez, sadece Header'da gönderilir)
+	logger.Debug("📦 [Ollama] Request JSON boyutu: %d bytes", len(jsonData))
+
 	url := fmt.Sprintf("%s/api/chat", o.BaseURL)
 
-	// 🚨 DÜZELTME #7: HTTP request hatasını kontrol et
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return nil, fmt.Errorf("HTTP request oluşturulamadı: %v", err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	
-	// SADECE HEADER ÜZERİNDEN YETKİLENDİRME
+
 	if o.APIKey != "" {
 		req.Header.Set("Authorization", "Bearer "+o.APIKey)
 	}
 
-	// 4. GÖNDER
+	logger.Debug("📡 [Ollama] POST request gönderiliyor: URL=%s", url)
+
 	resp, err := o.Client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("ollama bağlantı hatası: %v", err)
 	}
 	defer resp.Body.Close()
 
+	logger.Debug("📥 [Ollama] Response alındı: Status=%d", resp.StatusCode)
+
 	if resp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(resp.Body)
+		logger.Error("❌ [Ollama] API hatası: Status=%d, Body=%s", resp.StatusCode, string(bodyBytes))
 		return nil, fmt.Errorf("ollama API hatası (Durum: %d) - Detay: %s", resp.StatusCode, string(bodyBytes))
 	}
 
-	// =========================================================================
-	// 5. CANLI AKIŞ (NDJSON) VERİ SİNDİRME MOTORU
-	// =========================================================================
 	brainResp := &kernel.BrainResponse{}
 	streamChan, hasStream := ctx.Value("stream_chan").(chan string)
 
-	// 🚨 DÜZELTME #8: Scanner buffer boyutunu artır (büyük response'lar için)
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 64*1024), MaxScannerBufferSize)
 
-	// 🚨 DÜZELTME #9: Content length tracking (memory bloat önleme)
 	contentLength := 0
+	tokenCount := 0
+	toolCallCount := 0
 
 	for scanner.Scan() {
-		// 🚨 DÜZELTME #10: Context cancellation kontrolü (her iterasyonda)
 		select {
 		case <-ctx.Done():
 			logger.Warn("⚠️ [Ollama] Context iptal edildi, streaming durduruluyor")
@@ -325,16 +309,16 @@ func (o *OllamaProvider) Chat(ctx context.Context, history []kernel.Message, too
 		}
 
 		if chunk.Message.Content != "" {
-			// 🚨 DÜZELTME #11: Content length limiti
 			contentLength += len(chunk.Message.Content)
-			if contentLength > MaxContentLength {
+			tokenCount++
+
+			if contentLength > config.LLMMaxContentLength {
 				logger.Warn("⚠️ [Ollama] Response çok büyük, streaming durduruluyor")
 				break
 			}
 
 			brainResp.Content += chunk.Message.Content
 
-			// 🚨 DÜZELTME #12: Stream channel blocking önleme (non-blocking send)
 			if hasStream && streamChan != nil {
 				select {
 				case streamChan <- chunk.Message.Content:
@@ -345,7 +329,9 @@ func (o *OllamaProvider) Chat(ctx context.Context, history []kernel.Message, too
 		}
 
 		if len(chunk.Message.ToolCalls) > 0 {
+			toolCallCount += len(chunk.Message.ToolCalls)
 			for _, tc := range chunk.Message.ToolCalls {
+				logger.Debug("🛠️ [Ollama] Tool call parse edildi: Function=%s, Args=%v", tc.Function.Name, tc.Function.Arguments)
 				brainResp.ToolCalls = append(brainResp.ToolCalls, kernel.ToolCall{
 					Function:  tc.Function.Name,
 					Arguments: tc.Function.Arguments,
@@ -359,28 +345,24 @@ func (o *OllamaProvider) Chat(ctx context.Context, history []kernel.Message, too
 		}
 	}
 
-	// 🚨 DÜZELTME #13: Scanner error handling
 	if err := scanner.Err(); err != nil {
 		logger.Error("❌ [Ollama] Scanner hatası: %v", err)
 		return nil, fmt.Errorf("ollama canlı akış okuma hatası: %v", err)
 	}
 
-	// 🚨 DÜZELTME #14: Boş response kontrolü
+	logger.Info("✅ [Ollama] Response tamamlandı: Content=%d karakter, Tokens=%d, ToolCalls=%d", len(brainResp.Content), tokenCount, toolCallCount)
+
 	if brainResp.Content == "" && len(brainResp.ToolCalls) == 0 {
-		logger.Warn("⚠️ [Ollama] Yanıt boş geldi")
+		logger.Warn("⚠️ [Ollama] Yanıt boş geldi - Model tool call üretmedi")
 		return &kernel.BrainResponse{
 			Content: "[OLLAMA UYARISI]: Yanıt boş geldi.",
 		}, nil
 	}
 
-	logger.Debug("✅ [Ollama] Response alındı: %d karakter, %d tool call", len(brainResp.Content), len(brainResp.ToolCalls))
-
 	return brainResp, nil
 }
 
-// Embed: Metni vektöre çevirir
 func (o *OllamaProvider) Embed(ctx context.Context, text string) ([]float32, error) {
-	// 🚨 DÜZELTME #15: Input validation
 	if o == nil {
 		return nil, fmt.Errorf("ollama provider nil")
 	}
@@ -389,11 +371,12 @@ func (o *OllamaProvider) Embed(ctx context.Context, text string) ([]float32, err
 		return nil, fmt.Errorf("embed için metin boş olamaz")
 	}
 
-	// 🚨 DÜZELTME #16: Text length limiti
-	if len(text) > MaxContentLength {
-		text = text[:MaxContentLength]
-		logger.Warn("⚠️ [Ollama] Embed text kırpıldı (%d karakter)", MaxContentLength)
+	if len(text) > config.LLMMaxContentLength {
+		text = text[:config.LLMMaxContentLength]
+		logger.Warn("⚠️ [Ollama] Embed text kırpıldı (%d karakter)", config.LLMMaxContentLength)
 	}
+
+	logger.Debug("🧠 [Ollama] Embed başlatılıyor: Model=%s, Text=%d karakter", o.Model, len(text))
 
 	reqBody := map[string]interface{}{
 		"model":      o.Model,
@@ -407,18 +390,15 @@ func (o *OllamaProvider) Embed(ctx context.Context, text string) ([]float32, err
 		return nil, fmt.Errorf("JSON paketleme hatası: %v", err)
 	}
 
-	// URL oluşturma (405 Hatasını önlemek için token URL'ye eklenmez)
 	url := fmt.Sprintf("%s/api/embeddings", o.BaseURL)
 
-	// 🚨 DÜZELTME #17: HTTP request hatasını kontrol et
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return nil, fmt.Errorf("HTTP request oluşturulamadı: %v", err)
 	}
-	
+
 	req.Header.Set("Content-Type", "application/json")
-	
-	// SADECE HEADER ÜZERİNDEN YETKİLENDİRME
+
 	if o.APIKey != "" {
 		req.Header.Set("Authorization", "Bearer "+o.APIKey)
 	}
@@ -442,10 +422,12 @@ func (o *OllamaProvider) Embed(ctx context.Context, text string) ([]float32, err
 		return nil, fmt.Errorf("embed yanıtı çözülemedi: %v", err)
 	}
 
-	// 🚨 DÜZELTME #18: Embedding validation
 	if len(result.Embedding) == 0 {
 		return nil, fmt.Errorf("embedding vektörü boş")
 	}
 
+	logger.Debug("✅ [Ollama] Embedding oluşturuldu: %d boyut", len(result.Embedding))
+
 	return result.Embedding, nil
 }
+

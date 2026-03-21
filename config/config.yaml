@@ -31,7 +31,7 @@ brain:
     openai: "" 
     gemini: "" 
     ollama : ""
-    anthropic: "" 
+    qwen: "" 
 
 communication:
   whatsapp:

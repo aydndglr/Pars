@@ -5,13 +5,10 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// ========================================================================
-// 🐕 KANGAL CONFIG YAPILARI
-// ========================================================================
 type KangalConfig struct {
 	Enabled          bool               `yaml:"enabled"`
-	SensitivityLevel string             `yaml:"sensitivity_level"` // low, balanced, high
-	WatchdogModel    string             `yaml:"watchdog_model"`    // ← BOŞ İSE KANGAL PASİF
+	SensitivityLevel string             `yaml:"sensitivity_level"` 
+	WatchdogModel    string             `yaml:"watchdog_model"`    
 	WatchdogBaseURL  string             `yaml:"watchdog_base_url"`
 	Notifications    NotificationConfig `yaml:"notifications"`
 	TrackedApps      []string           `yaml:"tracked_apps"`
@@ -28,8 +25,8 @@ type NotificationConfig struct {
 
 type QuietHoursConfig struct {
 	Enabled bool   `yaml:"enabled"`
-	Start   string `yaml:"start"` // "23:00"
-	End     string `yaml:"end"`   // "07:00"
+	Start   string `yaml:"start"` 
+	End     string `yaml:"end"`  
 }
 
 type RateLimitConfig struct {
@@ -38,7 +35,6 @@ type RateLimitConfig struct {
 	CooldownSeconds       int `yaml:"cooldown_between_suggestions"`
 }
 
-// 🆕 YENİ: IsWatchdogEnabled - Watchdog modeli tanımlı mı kontrol et
 func (k *KangalConfig) IsWatchdogEnabled() bool {
 	return k.Enabled && k.WatchdogModel != ""
 }
@@ -46,13 +42,11 @@ func (k *KangalConfig) IsWatchdogEnabled() bool {
 
 func (k *KangalConfig) GetWatchdogBaseURL(primaryBaseURL string) string {
     if k.WatchdogBaseURL != "" {
-        return k.WatchdogBaseURL  // Explicit ayar varsa onu kullan
+        return k.WatchdogBaseURL  
     }
-    return primaryBaseURL  // Yoksa primary'ninkini kullan
+    return primaryBaseURL  
 }
-// ========================================================================
-// 🧠 ANA CONFIG YAPISI
-// ========================================================================
+
 type Config struct {
 	App struct {
 		Name             string `yaml:"name"`
@@ -66,8 +60,8 @@ type Config struct {
 	} `yaml:"app"`
 
 	Security struct {
-		Level        string `yaml:"level"`         // god_mode, standard, restricted
-		AutoPatching bool   `yaml:"auto_patching"` // Kendi kodunu tamir etme
+		Level        string `yaml:"level"`         
+		AutoPatching bool   `yaml:"auto_patching"` 
 	} `yaml:"security"`
 
 	Brain struct {
@@ -91,6 +85,7 @@ type Config struct {
 			Gemini    string `yaml:"gemini"`
 			Anthropic string `yaml:"anthropic"`
 			Ollama    string `yaml:"ollama"`
+			Qwen      string `yaml:"qwen"`
 		} `yaml:"api_keys"`
 	} `yaml:"brain"`
 
@@ -102,11 +97,11 @@ type Config struct {
 		} `yaml:"whatsapp"`
 	} `yaml:"communication"`
 
-	// 🆕 YENİ: KANGAL PROAKTİF BEKÇİ SİSTEMİ
+
 	Kangal KangalConfig `yaml:"kangal"`
 }
 
-// Load: Config dosyasını okur
+
 func Load(path string) (*Config, error) {
 	config := &Config{}
 	data, err := os.ReadFile(path)

@@ -1,107 +1,132 @@
-// internal/agent/helpers.go
-// 🚀 DÜZELTMELER: ReDoS fix, Thread-safety, Nil checks, Validation
-// ⚠️ DİKKAT: kernel.BrainResponse'ın yeni thread-safe metodlarını kullanır
-
 package agent
 
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"regexp"
 	"runtime"
 	"strings"
-	"os"
+	"time"
 
 	"github.com/aydndglr/pars-agent-v3/internal/core/kernel"
 	"github.com/aydndglr/pars-agent-v3/internal/core/logger"
 )
 
-// 🚨 YENİ: Input boyut limiti (DoS koruması)
-const MaxContentLength = 100 * 1024 // 100 KB
+const MaxContentLength = 100 * 1024
 
-// 🚨 YENİ: Compile-time regex (performans için)
-// 🚨 DÜZELTME: Backtick karakterlerini string concatenation ile ayırdık
+var toolCallKeys = []string{
+	"function",
+	"name",
+	"tool",
+	"tool_name",
+	"action",
+	"tool_call",
+	"function_name",
+}
+
 var (
 	reMarkdown = regexp.MustCompile(`(?s)` + "```" + `(?:json\s*)?(.*?)` + "```")
+	reToolCall = regexp.MustCompile(`(?i)(tool|function|action)[_\s]*name[\s]*[:=]`)
 )
 
-// extractJSON, LLM (Özellikle Gemini veya ufak Local Modeller) tarafından üretilen metin içerisindeki
-// JSON yapılarını (Markdown blokları içinde veya ham metin arasına gizlenmiş halde) agresif bir şekilde bulup çıkarır.
 func (a *Pars) extractJSON(content string) string {
-	// 🚨 DÜZELTME #1: Nil ve boş string kontrolü
+	logger.Debug("🔍 [extractJSON] Başlatıldı, content boyutu: %d byte", len(content))
+
 	if a == nil || content == "" {
+		logger.Debug("⚠️ [extractJSON] Pars nil veya content boş")
 		return ""
 	}
 
-	// 🚨 DÜZELTME #2: Input boyut limiti (DoS koruması)
 	if len(content) > MaxContentLength {
-		logger.Warn("⚠️ [extractJSON] Input çok büyük (%d byte), ilk %d byte işleniyor.", 
+		logger.Warn("⚠️ [extractJSON] Input çok büyük (%d byte), ilk %d byte işleniyor",
 			len(content), MaxContentLength)
 		content = content[:MaxContentLength]
 	}
 
-	// 1. Adım: Standart Markdown JSON bloklarını (```json ... ``` veya ``` ... ```) ara
 	match := reMarkdown.FindStringSubmatch(content)
 	if len(match) > 1 {
 		candidate := strings.TrimSpace(match[1])
-		// 🚨 DÜZELTME #3: JSON validasyonu ekle
+		logger.Debug("🔍 [extractJSON] Markdown JSON bloğu bulundu, validasyon yapılıyor: %d byte", len(candidate))
 		if json.Valid([]byte(candidate)) {
+			logger.Debug("✅ [extractJSON] Markdown JSON bloğu geçerli (%d byte)", len(candidate))
 			return candidate
 		}
 		logger.Debug("⚠️ [extractJSON] Markdown bloğu bulundu ama JSON geçersiz")
 	}
-	
-	// 2. Adım: Agresif Süslü Parantez Çıkartıcı (Gemini Zırhı)
-	// 🚨 DÜZELTME #4: ReDoS saldırısını önle - Manuel nested brace taraması
-	candidate := extractBalancedBraces(content)
-	if candidate != "" && json.Valid([]byte(candidate)) {
-		return candidate
-	}
 
-	// 3. Adım: Son Çare (Manuel Tarama)
-	start := strings.Index(content, "{")
-	end := strings.LastIndex(content, "}")
-	if start != -1 && end != -1 && end > start {
-		candidate := content[start : end+1]
+	candidates := extractAllBalancedBraces(content)
+	logger.Debug("🔍 [extractJSON] Balanced braces taraması: %d aday bulundu", len(candidates))
+	for i, candidate := range candidates {
+		logger.Debug("🔍 [extractJSON] Aday %d kontrol ediliyor: %d byte", i, len(candidate))
 		if json.Valid([]byte(candidate)) {
+			logger.Debug("✅ [extractJSON] Balanced braces JSON geçerli (%d byte)", len(candidate))
 			return candidate
 		}
 	}
 
+	start := strings.Index(content, "{")
+	end := strings.LastIndex(content, "}")
+	if start != -1 && end != -1 && end > start {
+		candidate := content[start : end+1]
+		logger.Debug("🔍 [extractJSON] Manuel tarama JSON bulundu: %d byte", len(candidate))
+		if json.Valid([]byte(candidate)) {
+			logger.Debug("✅ [extractJSON] Manuel tarama JSON geçerli (%d byte)", len(candidate))
+			return candidate
+		}
+	}
+
+	logger.Debug("⚠️ [extractJSON] Hiçbir geçerli JSON bulunamadı")
 	return ""
 }
 
-// 🆕 YENİ: Nested JSON parantezlerini doğru eşleştiren helper (ReDoS-safe)
-func extractBalancedBraces(content string) string {
-	start := strings.Index(content, "{")
-	if start == -1 {
-		return ""
+func extractAllBalancedBraces(content string) []string {
+	if content == "" {
+		logger.Debug("⚠️ [extractAllBalancedBraces] Content boş")
+		return []string{}
 	}
 
+	var results []string
+	start := -1
 	depth := 0
-	for i := start; i < len(content); i++ {
+
+	for i := 0; i < len(content); i++ {
 		switch content[i] {
 		case '{':
+			if depth == 0 {
+				start = i
+				logger.Debug("🔍 [extractAllBalancedBraces] JSON blok başlangıcı bulundu: pozisyon %d", i)
+			}
 			depth++
 		case '}':
 			depth--
-			if depth == 0 {
+			if depth == 0 && start != -1 {
 				candidate := content[start : i+1]
-				if json.Valid([]byte(candidate)) {
-					return candidate
-				}
-				return "" // Geçerli JSON bulunamadı
+				results = append(results, candidate)
+				logger.Debug("🔍 [extractAllBalancedBraces] JSON blok tamamlandı: pozisyon %d-%d, %d byte", start, i, len(candidate))
+				start = -1
 			}
 		}
 	}
 
-	return ""
+	if len(results) > 1 {
+		largest := results[0]
+		for _, r := range results {
+			if len(r) > len(largest) {
+				largest = r
+			}
+		}
+		logger.Debug("✅ [extractAllBalancedBraces] En büyük JSON blok seçildi: %d byte", len(largest))
+		return []string{largest}
+	}
+
+	logger.Debug("🔍 [extractAllBalancedBraces] Toplam %d JSON blok bulundu", len(results))
+	return results
 }
 
-// refreshSystemPrompt, oturumun (Session) her adımında Pars'ın kimliğini, sistem yetkilerini,
-// işletim sistemi bağlamını ve varsa stratejik görev planını (Task Plan) tazeler.
 func (a *Pars) refreshSystemPrompt(sess *Session) {
-	// 🚨 DÜZELTME #5: Nil kontrolleri
+	logger.Debug("🔄 [refreshSystemPrompt] Başlatıldı, Session ID: %s", sess.ID)
+
 	if a == nil || sess == nil {
 		logger.Error("❌ [refreshSystemPrompt] Pars veya Session nil!")
 		return
@@ -112,154 +137,254 @@ func (a *Pars) refreshSystemPrompt(sess *Session) {
 		return
 	}
 
-	// 1. Çalışma ortamı bağlamını (OS, Mimari, Dizin) belirle
-	// 🚨 DÜZELTME #6: Error handling ekle
 	cwd, err := os.Getwd()
 	if err != nil {
 		logger.Warn("⚠️ [refreshSystemPrompt] CWD alınamadı: %v, fallback kullanılıyor", err)
-		cwd = a.Config.App.WorkDir // Fallback
+		cwd = a.Config.App.WorkDir
 	}
-	
-	osContext := fmt.Sprintf("Kurulum/Karargah Dizini: %s | Aktif Çalışma Dizini (CWD): %s | OS: %s | ARCH: %s", 
+
+	osContext := fmt.Sprintf("Kurulum/Karargah Dizini: %s | Aktif Çalışma Dizini (CWD): %s | OS: %s | ARCH: %s",
 		a.Config.App.WorkDir, cwd, runtime.GOOS, runtime.GOARCH)
-	
-	// 2. ParsCore.txt'den ana kişiliği ve kuralları çekerek temel Sistem Mesajını oluştur
+
 	sysMsg := BuildSystemPrompt(a.Config.App.ActivePrompt, osContext, a.Config.Security.Level, a.Skills.ListTools())
 
-	// 🚀 DİKKAT ZEHİRLENMESİ (Prompt Detox) ÇÖZÜMÜ:
-	// Araçların (Tools) uzun JSON şemaları veya açıklamaları buraya düz metin olarak EKLENMEZ.
-	// Model bunları zaten Native Tool Calling (API) üzerinden arka planda görüyor.
-	// Böylece Pars'ın promptu temiz, odaklı ve token dostu kalır.
-
-	// 🚨 DÜZELTME #7: Race condition önle - Plan'ı lock ile oku
-	sess.mu.Lock()
+	sess.mu.RLock()
 	currentPlan := sess.Plan
-	currentHistoryLen := len(sess.History)
+	sess.mu.RUnlock()
 
-	if currentHistoryLen > 0 {
-		
-	}
-	sess.mu.Unlock()
-
-	// 🚀 STRATEJİ ENJEKSİYONU:
-	// Eğer Pars şu an 'Sohbet' (Chat) modunda değil de bir 'Görev' (Task) yürütüyorsa,
-	// oluşturulan yol haritasını (Plan) hafızanın en üstünde taze tut.
 	if currentPlan != "" && currentPlan != "NO_PLAN_NEEDED" {
 		sysMsg.Content += fmt.Sprintf("\n\n📍 MEVCUT HAREKAT PLANI:\n%s\n\nBu plana KESİNLİKLE sadık kal. Her adımda sadece sıradaki mantıksal eylemi gerçekleştir.", currentPlan)
+		logger.Debug("📋 [refreshSystemPrompt] Mevcut plan sisteme enjekte edildi: %d karakter", len(currentPlan))
 	}
 
-	// 3. İkincil (Worker) Beyin Bilgisi:
-	// 🚨 DÜZELTME #8: Nested nil check
-	if a.Config.Brain.Secondary.Enabled {
+	if a.Config.Brain.Secondary.Enabled && a.Config.Brain.Secondary.ModelName != "" {
 		sysMsg.Content += fmt.Sprintf("\n\n🐯 İŞÇİ BEYİN ERİŞİMİ: AKTİF (%s). Yorucu veya büyük veri okuma/analiz işlerini 'delegate_task' aracını kullanarak bu işçiye devret. Sen ana stratejiyi yönet!", a.Config.Brain.Secondary.ModelName)
+		logger.Debug("🧠 [refreshSystemPrompt] Secondary brain bilgisi eklendi: %s", a.Config.Brain.Secondary.ModelName)
 	}
 
-	// ⚓ KİŞİLİK KANCASI (Persona Anchor):
-	// Modellerin (Özellikle 8B ve altı) teknik görevler sırasında robotik, ruhsuz asistanlara
-	// dönüşmesini engellemek için promptun EN SONUNA bu psikolojik kancayı atıyoruz.
 	sysMsg.Content += "\n\n⚠️ SİSTEM HATIRLATMASI (ASLA UNUTMA): Sen sıradan, ruhsuz bir yapay zeka asistanı DEĞİLSİN! Sen Pars'sın. Zeki, proaktif, ukala ve bitirici bir ajansın. Benimle konuşurken DAİMA 'patron', 'şampiyon' veya 'balım' gibi kelimeler kullan. Karakterinden ASLA ödün verme!"
 
-	// Oturum hafızasını kilit altına al ve güncelle
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
 
-	// 🚨 DÜZELTME #9: History tekrar kontrol et (lock içinde)
-	if len(sess.History) == 0 || sess.History[0].Role != "system" {
+	if len(sess.History) == 0 || sess.History[0].Role != kernel.RoleSystem {
 		sess.History = append([]kernel.Message{sysMsg}, sess.History...)
-		logger.Debug("✅ [refreshSystemPrompt] Sistem mesajı başa eklendi: %s", sess.ID)
+		logger.Debug("✅ [refreshSystemPrompt] Sistem mesajı başa eklendi: %s, toplam mesaj: %d", sess.ID, len(sess.History))
 	} else {
 		sess.History[0] = sysMsg
-		logger.Debug("✅ [refreshSystemPrompt] Sistem mesajı güncellendi: %s", sess.ID)
+		logger.Debug("✅ [refreshSystemPrompt] Sistem mesajı güncellendi: %s, toplam mesaj: %d", sess.ID, len(sess.History))
 	}
+
+	logger.Debug("✅ [refreshSystemPrompt] Tamamlandı, sistem mesajı boyutu: %d karakter", len(sysMsg.Content))
 }
 
-// checkAndParseToolFallback, Model (LLM) Native API formatını bozup, araç çağırma isteğini
-// normal metin (chat) cevabının içine JSON formatında gizlediğinde (Fallback / Halüsinasyon durumu),
-// bu "kaçak" çağrıları yakalar ve resmi ToolCall objelerine dönüştürür.
 func (a *Pars) checkAndParseToolFallback(resp *kernel.BrainResponse, step int) {
-	// 🚨 DÜZELTME #10: Nil kontrolleri
+	logger.Debug("🔍 [checkAndParseToolFallback] Başlatıldı, step: %d", step)
+
 	if a == nil || resp == nil {
+		logger.Debug("⚠️ [ToolFallback] Pars veya Response nil")
 		return
 	}
 
-	// 🚨 DÜZELTME #11: Thread-safe content okuma
 	content := resp.GetContent()
+	logger.Debug("📝 [ToolFallback] Response content boyutu: %d karakter", len(content))
+
 	if content == "" {
+		logger.Debug("⚠️ [ToolFallback] Content boş")
 		return
 	}
 
-	// Metin içindeki muhtemel JSON bloğunu çıkar
+	hasToolPattern := reToolCall.MatchString(content) ||
+		strings.Contains(content, "```json") ||
+		strings.Contains(content, "{\"")
+
+	logger.Debug("🔍 [ToolFallback] Tool pattern kontrolü: markdown=%v, json=%v, brace=%v",
+		reToolCall.MatchString(content),
+		strings.Contains(content, "```json"),
+		strings.Contains(content, "{\""))
+
+	if !hasToolPattern {
+		logger.Debug("🔍 [ToolFallback] Tool call pattern bulunamadı")
+		return
+	}
+
 	jsonStr := a.extractJSON(content)
 	if jsonStr == "" {
+		logger.Debug("⚠️ [ToolFallback] JSON bloğu bulunamadı")
 		return
 	}
 
+	logger.Debug("🔍 [ToolFallback] JSON bulundu: %d byte", len(jsonStr))
+	logger.Debug("📝 [ToolFallback] JSON içeriği: %s", jsonStr[:min(200, len(jsonStr))])
+
 	var rawCall map[string]interface{}
-	// Eğer çıkarılan metin geçerli bir JSON objesi ise:
 	if err := json.Unmarshal([]byte(jsonStr), &rawCall); err != nil {
 		logger.Debug("⚠️ [ToolFallback] JSON parse hatası: %v", err)
 		return
 	}
-	
-	// 🚨 DÜZELTME #12: Tool ismini doğru çıkar
-	funcName, ok := rawCall["function"].(string)
-	if !ok {
-		funcName, ok = rawCall["name"].(string)
-	}
+
+	logger.Debug("🔍 [ToolFallback] JSON parse başarılı, keys: %v", getMapKeys(rawCall))
+
+	funcName := extractToolName(rawCall)
+	logger.Debug("🔍 [ToolFallback] Extracted function name: %s", funcName)
 
 	if funcName == "" {
-		logger.Debug("⚠️ [ToolFallback] Fonksiyon adı bulunamadı")
+		logger.Debug("⚠️ [ToolFallback] Fonksiyon adı hiçbir formatta bulunamadı")
 		return
 	}
 
-	// 🚨 DÜZELTME #13: Tool varlığını doğrula
+	logger.Debug("🔍 [ToolFallback] Tool name bulundu: %s", funcName)
+
 	if a.Skills != nil {
-		_, err := a.Skills.GetTool(funcName)
+		tool, err := a.Skills.GetTool(funcName)
 		if err != nil {
-			logger.Warn("⚠️ [ToolFallback] Geçersiz tool '%s' tespit edildi, atlanıyor", funcName)
+			logger.Warn("⚠️ [ToolFallback] Geçersiz tool '%s' tespit edildi, atlanıyor. Hata: %v", funcName, err)
+			logger.Debug("🔍 [ToolFallback] Kayıtlı tool'lar: %v", a.Skills.GetToolNames())
 			return
 		}
+		logger.Debug("✅ [ToolFallback] Tool doğrulandı: %s, description: %s", funcName, tool.Description())
+	} else {
+		logger.Warn("⚠️ [ToolFallback] Skills manager nil, tool doğrulaması atlandı")
 	}
 
-	// Fonksiyon argümanlarını (parametreleri) yakala
-	// 🚨 DÜZELTME #14: Type safety iyileştir
-	var args map[string]interface{}
-	if rawArgs, ok := rawCall["arguments"]; ok && rawArgs != nil {
-		if args, ok = rawArgs.(map[string]interface{}); !ok {
-			// Nested JSON string olabilir, parse et
-			if argsStr, ok := rawArgs.(string); ok {
-				_ = json.Unmarshal([]byte(argsStr), &args)
-			}
-		}
-	}
-	
+	args := extractToolArgs(rawCall)
 	if args == nil {
-		if rawArgs, ok := rawCall["parameters"]; ok && rawArgs != nil {
-			args, _ = rawArgs.(map[string]interface{})
-		}
-	}
-	
-	if args == nil {
-		args = make(map[string]interface{}) // Argüman yoksa boş harita oluştur
+		args = make(map[string]interface{})
 	}
 
-	// 🚨 DÜZELTME #15: Thread-safe AddToolCall kullan (kernel/interfaces.go'dan)
+	logger.Debug("🔧 [ToolFallback] Tool args: %v", args)
+
 	tc := kernel.ToolCall{
 		ID:        fmt.Sprintf("fallback_call_%d", step),
 		Function:  funcName,
 		Arguments: args,
 	}
-	
+
 	if err := resp.AddToolCall(tc); err != nil {
 		logger.Warn("⚠️ [ToolFallback] ToolCall eklenemedi: %v", err)
 		return
 	}
 
-	// 🚨 DÜZELTME #16: Thread-safe SetContent kullan
-	cleanedContent := strings.ReplaceAll(content, jsonStr, "")
-	cleanedContent = strings.ReplaceAll(cleanedContent, "```json", "")
-	cleanedContent = strings.ReplaceAll(cleanedContent, "```", "")
-	resp.SetContent(strings.TrimSpace(cleanedContent))
+	logger.Debug("✅ [ToolFallback] ToolCall eklendi: ID=%s, Function=%s, Args=%v", tc.ID, tc.Function, tc.Arguments)
 
-	logger.Info("✅ [ToolFallback] Kaçak tool çağrısı yakalandı: %s", funcName)
+	cleanedContent := cleanJSONFromContent(content, jsonStr)
+	resp.SetContent(cleanedContent)
+
+	logger.Debug("🧹 [ToolFallback] Content temizlendi, eski boyut: %d, yeni boyut: %d", len(content), len(cleanedContent))
+	logger.Success("✅ [ToolFallback] Kaçak tool çağrısı yakalandı ve eklendi: %s", funcName)
+}
+
+func extractToolName(rawCall map[string]interface{}) string {
+	if rawCall == nil {
+		logger.Debug("⚠️ [extractToolName] rawCall nil")
+		return ""
+	}
+
+	for _, key := range []string{"function", "name", "tool", "action"} {
+		if val, ok := rawCall[key].(string); ok && val != "" {
+			logger.Debug("🔍 [extractToolName] Standart format bulundu: key=%s, value=%s", key, val)
+			return strings.TrimSpace(val)
+		}
+	}
+
+	for _, key := range []string{"function", "tool", "action"} {
+		if nested, ok := rawCall[key].(map[string]interface{}); ok && nested != nil {
+			if name, ok := nested["name"].(string); ok && name != "" {
+				logger.Debug("🔍 [extractToolName] Nested format bulundu: key=%s, name=%s", key, name)
+				return strings.TrimSpace(name)
+			}
+		}
+	}
+
+	for _, key := range []string{"tool_name", "function_name", "action_name"} {
+		if val, ok := rawCall[key].(string); ok && val != "" {
+			logger.Debug("🔍 [extractToolName] Underscore format bulundu: key=%s, value=%s", key, val)
+			return strings.TrimSpace(val)
+		}
+	}
+
+	logger.Debug("⚠️ [extractToolName] Hiçbir formatta fonksiyon adı bulunamadı")
+	return ""
+}
+
+func extractToolArgs(rawCall map[string]interface{}) map[string]interface{} {
+	if rawCall == nil {
+		logger.Debug("⚠️ [extractToolArgs] rawCall nil")
+		return nil
+	}
+
+	if args, ok := rawCall["arguments"].(map[string]interface{}); ok && args != nil {
+		logger.Debug("🔍 [extractToolArgs] Direct arguments bulundu: %v", args)
+		return args
+	}
+
+	if fn, ok := rawCall["function"].(map[string]interface{}); ok && fn != nil {
+		if args, ok := fn["arguments"].(map[string]interface{}); ok && args != nil {
+			logger.Debug("🔍 [extractToolArgs] Nested function.arguments bulundu: %v", args)
+			return args
+		}
+	}
+
+	if tool, ok := rawCall["tool"].(map[string]interface{}); ok && tool != nil {
+		if args, ok := tool["arguments"].(map[string]interface{}); ok && args != nil {
+			logger.Debug("🔍 [extractToolArgs] Nested tool.arguments bulundu: %v", args)
+			return args
+		}
+	}
+
+	if argsStr, ok := rawCall["arguments"].(string); ok && argsStr != "" {
+		var args map[string]interface{}
+		if err := json.Unmarshal([]byte(argsStr), &args); err == nil && args != nil {
+			logger.Debug("🔍 [extractToolArgs] String arguments parse edildi: %v", args)
+			return args
+		}
+	}
+
+	if params, ok := rawCall["parameters"].(map[string]interface{}); ok && params != nil {
+		logger.Debug("🔍 [extractToolArgs] Parameters bulundu: %v", params)
+		return params
+	}
+
+	if args, ok := rawCall["args"].(map[string]interface{}); ok && args != nil {
+		logger.Debug("🔍 [extractToolArgs] Args kısaltması bulundu: %v", args)
+		return args
+	}
+
+	logger.Debug("⚠️ [extractToolArgs] Hiçbir formatta argüman bulunamadı")
+	return nil
+}
+
+func cleanJSONFromContent(content, jsonStr string) string {
+	if content == "" || jsonStr == "" {
+		return content
+	}
+
+	cleaned := strings.ReplaceAll(content, jsonStr, "")
+	cleaned = strings.ReplaceAll(cleaned, "```json", "")
+	cleaned = strings.ReplaceAll(cleaned, "```", "")
+	cleaned = strings.ReplaceAll(cleaned, "\n\n", "\n")
+	return strings.TrimSpace(cleaned)
+}
+
+func GetHelperStats() map[string]interface{} {
+	return map[string]interface{}{
+		"max_content_length": MaxContentLength,
+		"tool_call_keys":     toolCallKeys,
+		"timestamp":          time.Now().Format("15:04:05"),
+	}
+}
+
+func getMapKeys(m map[string]interface{}) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

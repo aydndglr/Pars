@@ -1,7 +1,3 @@
-// internal/agent/session.go
-// 🚀 DÜZELTMELER: Thread-safety, Graceful shutdown, Nil checks, Error handling
-// ⚠️ DİKKAT: execution.go ve pars.go ile %100 uyumlu, breaking change YOK
-
 package agent
 
 import (
@@ -16,39 +12,25 @@ import (
 	"github.com/aydndglr/pars-agent-v3/internal/core/logger"
 )
 
-// =========================================================================
-// 📦 SESSION YAPISI
-// =========================================================================
-
-// Session (Oturum), Pars'ın aktif olarak yürüttüğü her bir görev veya sohbetin
-// izole bir şekilde tutulduğu hafıza ve durum (state) yöneticisidir.
 type Session struct {
 	ID        string
-	History   []kernel.Message // Ajanın kullanıcı ve sistem ile olan konuşma geçmişi
-	Plan      string           // Görev (Task) modunda izlenecek stratejik adımlar
+	History   []kernel.Message
+	Plan      string
 	CreatedAt time.Time
-	Cancel    context.CancelFunc // Oturumu dışarıdan güvenle durdurabilmek için iptal tetikleyicisi
-	mu        sync.Mutex         // Eşzamanlı okuma/yazma çakışmalarını önleyen kilit
+	Cancel    context.CancelFunc
+	mu        sync.RWMutex
 }
 
-// =========================================================================
-// 🆕 SESSION OLUŞTURMA
-// =========================================================================
-
-// createSession, benzersiz bir kimlik (ID) ile yeni bir görev oturumu başlatır
-// ve bunu ajanın aktif oturumlar listesine ekler.
 func (a *Pars) createSession(cancel context.CancelFunc) *Session {
 	a.sessMu.Lock()
 	defer a.sessMu.Unlock()
 
-	// 🚨 DÜZELTME #1: rand.Read() hatasını kontrol et
 	randomBytes := make([]byte, 4)
 	if _, err := rand.Read(randomBytes); err != nil {
-		// Fallback: zaman tabanlı ID (nadir gerçekleşir)
 		logger.Warn("⚠️ [createSession] Kriptografik ID oluşturulamadı, fallback kullanılıyor: %v", err)
 		randomBytes = []byte(fmt.Sprintf("%d", time.Now().UnixNano()))
 	}
-	
+
 	sessID := fmt.Sprintf("TSK-%s", hex.EncodeToString(randomBytes))
 
 	sess := &Session{
@@ -58,45 +40,40 @@ func (a *Pars) createSession(cancel context.CancelFunc) *Session {
 		Cancel:    cancel,
 	}
 
-	a.Sessions[sessID] = sess
-	logger.Debug("✅ [SESSION] Yeni oturum oluşturuldu: %s", sessID)
+	a.sessions[sessID] = sess
+	logger.Info("✅ [SESSION] Yeni oturum oluşturuldu: %s", sessID)
+	logger.Debug("📝 [SESSION] Session detayları: ID=%s, CreatedAt=%s, History=%d mesaj",
+		sessID, sess.CreatedAt.Format("15:04:05"), len(sess.History))
 	return sess
 }
 
-// =========================================================================
-// 🧹 SESSION TEMİZLEME
-// =========================================================================
-
-// cleanupSession, işi biten veya iptal edilen oturumu bellekten (RAM) temizler.
 func (a *Pars) cleanupSession(id string) {
 	a.sessMu.Lock()
 	defer a.sessMu.Unlock()
 
-	sess, exists := a.Sessions[id]
+	logger.Debug("🗑️ [cleanupSession] Oturum temizleme başlatıldı: %s", id)
+
+	sess, exists := a.sessions[id]
 	if !exists {
-		logger.Debug("⚠️ [cleanupSession] Silinmeye çalışılan oturum bulunamadı: %s", id)
+		logger.Warn("⚠️ [cleanupSession] Silinmeye çalışılan oturum bulunamadı: %s", id)
 		return
 	}
 
-	// 🚨 DÜZELTME #2: Cancel fonksiyonunu çağır (goroutine sızıntısını önle)
+	logger.Debug("🔍 [cleanupSession] Oturum bulundu: %s, History=%d mesaj, Plan=%d karakter",
+		id, len(sess.History), len(sess.Plan))
+
 	if sess.Cancel != nil {
+		logger.Debug("🔌 [cleanupSession] Session cancel fonksiyonu çağrılıyor: %s", id)
 		sess.Cancel()
 	}
 
-	delete(a.Sessions, id)
-	logger.Debug("🗑️ [cleanupSession] Oturum temizlendi: %s", id)
+	delete(a.sessions, id)
+	logger.Info("🗑️ [cleanupSession] Oturum temizlendi: %s", id)
 }
 
-// =========================================================================
-// 🧠 CONTEXT WINDOW YÖNETİMİ
-// =========================================================================
-
-// manageContextWindow, Pars'ın hafızasını (Context Window) akıllı bir şekilde yönetir.
-// Mesaj sayısına değil, karakter (token) yoğunluğuna bakarak maliyetleri düşürür ve
-// Büyük Dil Modellerinin bağlam sınırını aşmasını engeller.
 func (a *Pars) manageContextWindow(sess *Session) {
-	// 🚨 DÜZELTME #3: Nil kontrolleri
 	if a == nil || sess == nil {
+		logger.Warn("⚠️ [manageContextWindow] Pars veya Session nil, işlem atlandı")
 		return
 	}
 
@@ -104,11 +81,11 @@ func (a *Pars) manageContextWindow(sess *Session) {
 	defer sess.mu.Unlock()
 
 	if len(sess.History) == 0 {
+		logger.Debug("ℹ️ [manageContextWindow] History boş, sıkıştırma atlandı: %s", sess.ID)
 		return
 	}
 
-	// 🚨 DÜZELTME #4: Config nil kontrolü
-	maxCharLimit := 320000 // Varsayılan değer
+	maxCharLimit := 320000
 	if a.Config != nil && a.Config.App.MaxContextTokens > 0 {
 		maxCharLimit = a.Config.App.MaxContextTokens * 4
 	}
@@ -118,19 +95,27 @@ func (a *Pars) manageContextWindow(sess *Session) {
 		totalChars += len(msg.Content)
 	}
 
+	logger.Debug("📊 [manageContextWindow] Context analizi: Session=%s, Toplam=%d karakter, Limit=%d karakter",
+		sess.ID, totalChars, maxCharLimit)
+
 	if totalChars <= maxCharLimit {
+		logger.Debug("✅ [manageContextWindow] Limit aşılmadı, sıkıştırma atlandı: %d/%d karakter",
+			totalChars, maxCharLimit)
 		return
 	}
 
-	// 🚨 DÜZELTME #5: Sistem mesajını doğru şekilde koru (pointer yerine value)
+	logger.Warn("⚠️ [manageContextWindow] Context limiti aşıldı, sıkıştırma başlatılıyor: %d > %d karakter",
+		totalChars, maxCharLimit)
+
 	var systemMsg kernel.Message
 	var hasSystem bool
 	var nonSystemMsgs []kernel.Message
 
 	for i, msg := range sess.History {
 		if msg.Role == "system" && i == 0 {
-			systemMsg = msg // 🆕 Pointer değil, value kopyala
+			systemMsg = msg
 			hasSystem = true
+			logger.Debug("📝 [manageContextWindow] Sistem mesajı bulundu: %d karakter", len(msg.Content))
 		} else {
 			nonSystemMsgs = append(nonSystemMsgs, msg)
 		}
@@ -141,101 +126,113 @@ func (a *Pars) manageContextWindow(sess *Session) {
 		return
 	}
 
-	// 🚨 DÜZELTME #6: Mesajları sondan başa doğru doğru sırayla topla
 	var recentMsgs []kernel.Message
 	currentChars := len(systemMsg.Content)
+	safeIndex := -1
+
+	logger.Debug("🔍 [manageContextWindow] Mesajlar tersinden taranıyor: %d mesaj", len(nonSystemMsgs))
 
 	for i := len(nonSystemMsgs) - 1; i >= 0; i-- {
 		msg := nonSystemMsgs[i]
 		msgLen := len(msg.Content)
 
 		if currentChars+msgLen > maxCharLimit {
-			break
+			logger.Debug("⚠️ [manageContextWindow] Limit aşımı tespit edildi: %d + %d > %d",
+				currentChars, msgLen, maxCharLimit)
+
+			if msg.Role == kernel.RoleTool || len(msg.ToolCalls) > 0 {
+				logger.Debug("🔧 [manageContextWindow] Tool mesajı tespit edildi, döngü kırıldı")
+				break
+			} else {
+				logger.Debug("📝 [manageContextWindow] Normal mesaj, döngü kırıldı")
+				break
+			}
 		}
 
-		recentMsgs = append(recentMsgs, msg)
 		currentChars += msgLen
+		safeIndex = i
 	}
 
-	// 🚨 DÜZELTME #7: Mesaj sırasını düzelt (en eski -> en yeni)
-	for i, j := 0, len(recentMsgs)-1; i < j; i, j = i+1, j-1 {
-		recentMsgs[i], recentMsgs[j] = recentMsgs[j], recentMsgs[i]
+	if safeIndex == -1 {
+		safeIndex = len(nonSystemMsgs) - 1
+		logger.Warn("⚠️ [manageContextWindow] SafeIndex -1, son mesaj kullanılıyor: %d", safeIndex)
 	}
 
-	// Yeni hafızayı inşa et
+	recentMsgs = nonSystemMsgs[safeIndex:]
 	newHistory := []kernel.Message{systemMsg}
+	droppedCount := safeIndex
 
-	// Silinen mesaj bilgisi ekle
-	droppedCount := len(nonSystemMsgs) - len(recentMsgs)
+	logger.Info("📊 [manageContextWindow] Sıkıştırma istatistikleri: SafeIndex=%d, Dropped=%d mesaj, Kept=%d mesaj",
+		safeIndex, droppedCount, len(recentMsgs))
+
 	if droppedCount > 0 {
 		compressionInfo := kernel.Message{
 			Role:    "system",
 			Content: fmt.Sprintf("\n[SİSTEM BİLGİSİ: Limitleri korumak için önceki %d mesaj arşive kaldırıldı. Güncel bağlama odaklan.]\n", droppedCount),
 		}
 		newHistory = append(newHistory, compressionInfo)
+		logger.Info("📝 [manageContextWindow] Sıkıştırma bilgisi eklendi: %d mesaj arşivlendi", droppedCount)
 	}
 
-	// Son mesajları yeni hafızaya ekle
 	newHistory = append(newHistory, recentMsgs...)
 	sess.History = newHistory
 
-	logger.Warn("🧠 [%s] Context Budandı: Boyut %d karaktere düşürüldü (%d eski blok silindi).",
-		sess.ID, currentChars, droppedCount)
+	newTotalChars := 0
+	for _, msg := range sess.History {
+		newTotalChars += len(msg.Content)
+	}
+
+	logger.Warn("🧠 [%s] Context Budandı: Eski=%d karakter, Yeni=%d karakter, Silinen=%d mesaj",
+		sess.ID, totalChars, newTotalChars, droppedCount)
 }
 
-// =========================================================================
-// 📡 EVENT PROCESSOR (TELEMETRİ / SİSTEM OLAY DİNLEYİCİSİ)
-// =========================================================================
-
-// startEventProcessor, Pars'ın arka planda sistemden gelen olayları dinlemesini sağlar.
-// 🚨 DÜZELTME #8: Graceful shutdown için context desteği eklendi
 func (a *Pars) startEventProcessor() {
 	if a.EventChannel == nil {
 		a.EventChannel = make(chan string, 100)
+		logger.Info("📡 [EVENT BUS] Event channel oluşturuldu: 100 kapasite")
 	}
 
 	go func() {
 		logger.Success("🩺 [EVENT BUS] Pars, Sistem Olaylarını dinlemeye başladı...")
 		defer logger.Info("🩺 [EVENT BUS] Pars, Sistem Olayları dinlemeyi bıraktı.")
 
-		// 🚨 DÜZELTME #9: Kanal kapandığında temiz çık
 		for eventMsg := range a.EventChannel {
-			logger.Error("🚨 [SİSTEM SİNYALİ ALINDI]: %s", eventMsg)
+			logger.Info("🚨 [SİSTEM SİNYALİ ALINDI]: %d karakter", len(eventMsg))
+			logger.Debug("📝 [SİSTEM SİNYALİ] İçerik: %s", eventMsg[:min(200, len(eventMsg))])
 			a.handleSystemEvent(eventMsg)
 		}
 	}()
 }
 
-// =========================================================================
-// 🎯 SİSTEM OLAY İŞLEME
-// =========================================================================
-
-// handleSystemEvent, alınan telemetri ve güvenlik mesajlarını işler.
-// Hem otonom beyne (WhatsApp için) haber verir, hem de aktif terminal sohbetine enjekte eder.
 func (a *Pars) handleSystemEvent(eventMsg string) {
-	// 🚨 DÜZELTME #10: Nil kontrolü
 	if a == nil {
+		logger.Warn("⚠️ [handleSystemEvent] Pars nil, event işlenmedi")
 		return
 	}
 
-	// 1. 🚀 WHATSAPP / OTONOM GÖREV KANCASI VARSA TETİKLE
+	logger.Info("📢 [handleSystemEvent] Sistem eventi işleniyor: %d karakter", len(eventMsg))
+
 	if a.AlertHook != nil {
+		logger.Debug("🔔 [handleSystemEvent] AlertHook mevcut, asenkron çağrılıyor")
 		go func() {
 			defer func() {
 				if r := recover(); r != nil {
 					logger.Error("🚨 [ALERT HOOK PANIC]: %v", r)
 				}
 			}()
+			logger.Info("📞 [AlertHook] AlertHook çağrılıyor...")
 			a.AlertHook(eventMsg)
+			logger.Info("✅ [AlertHook] AlertHook tamamlandı")
 		}()
+	} else {
+		logger.Warn("⚠️ [handleSystemEvent] AlertHook nil, alert gönderilemedi")
 	}
 
-	// 2. 🚨 DÜZELTME #11: Aktif oturumu doğru şekilde bul (RLock kullan)
 	a.sessMu.RLock()
 	var activeSess *Session
 	var latestTime time.Time
 
-	for _, sess := range a.Sessions {
+	for _, sess := range a.sessions {
 		if sess.CreatedAt.After(latestTime) {
 			latestTime = sess.CreatedAt
 			activeSess = sess
@@ -243,30 +240,37 @@ func (a *Pars) handleSystemEvent(eventMsg string) {
 	}
 	a.sessMu.RUnlock()
 
-	// 3. 🚨 DÜZELTME #12: Session silinmiş olabilir, tekrar kontrol et
 	if activeSess != nil {
+		logger.Info("📝 [handleSystemEvent] Aktif session bulundu: %s, CreatedAt=%s",
+			activeSess.ID, activeSess.CreatedAt.Format("15:04:05"))
+
 		activeSess.mu.Lock()
-		
-		// 🆕 Session hala geçerli mi kontrol et
+
 		if activeSess.History != nil {
 			activeSess.History = append(activeSess.History, kernel.Message{
 				Role:    "user",
 				Content: fmt.Sprintf("[SİSTEM UYARISI]: %s", eventMsg),
 			})
+			logger.Debug("📝 [handleSystemEvent] Sistem uyarısı history'ye eklendi: %s, Total=%d mesaj",
+				activeSess.ID, len(activeSess.History))
+		} else {
+			logger.Warn("⚠️ [handleSystemEvent] ActiveSess.History nil, mesaj eklenemedi")
 		}
-		
+
 		activeSess.mu.Unlock()
 
-		// 🚨 DÜZELTME #13: manageContextWindow'u goroutine'de çağır (blocking önle)
 		go func() {
 			defer func() {
 				if r := recover(); r != nil {
 					logger.Error("🚨 [manageContextWindow PANIC]: %v", r)
 				}
 			}()
+			logger.Debug("🧠 [handleSystemEvent] manageContextWindow çağrılıyor...")
 			a.manageContextWindow(activeSess)
+			logger.Debug("✅ [handleSystemEvent] manageContextWindow tamamlandı")
 		}()
 	} else {
-		logger.Debug("🚨 Aktif terminal oturumu yok, arka plan uyarısı otonom beyne iletildi: %s", eventMsg)
+		logger.Warn("🚨 [handleSystemEvent] Aktif terminal oturumu yok, arka plan uyarısı otonom beyne iletildi: %s",
+			eventMsg[:min(200, len(eventMsg))])
 	}
 }

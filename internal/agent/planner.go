@@ -1,63 +1,133 @@
-// internal/agent/planner.go
-// 🚀 DÜZELTMELER: Nil checks, Error handling, Context timeout, Path validation
-// ⚠️ DİKKAT: execution.go ve helpers.go ile %100 uyumlu
-
 package agent
 
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/aydndglr/pars-agent-v3/internal/core/config"
 	"github.com/aydndglr/pars-agent-v3/internal/core/kernel"
 	"github.com/aydndglr/pars-agent-v3/internal/core/logger"
 )
 
-// 🚨 YENİ: Timeout sabiti
-const PlanGenerationTimeout = 30 * time.Second
+var BasicGreetings = []string{
+	"selam", "selamlar", "merhaba", "hello", "hi", "hey",
+	"nasılsın", "nasıl gidiyor", "ne haber",
+	"tamam", "ok", "teşekkürler", "thanks", "sağ ol",
+	"kimsin", "adın ne", "ne yaparsın",
+}
 
-// generatePlan: Pars'in bir göreve başlamadan önce yürüttüğü niyet okuma ve stratejik düşünme aşaması.
-func (a *Pars) generatePlan(ctx context.Context, input string) (string, error) {
-	// 🚨 DÜZELTME #1: Nil kontrolleri
-	if a == nil {
-		logger.Debug("⚠️ [Planner] Pars instance nil, plan atlandı")
-		return "NO_PLAN_NEEDED", nil
+var SmallModelNames = []string{
+	"qwen3:1.5b", "qwen3:4b", "qwen3.5:4b", "qwen2.5:3b", "qwen2.5:7b",
+	"llama3:8b", "llama3.2:3b", "llama3.2:1b", "phi3:3.8b", "mistral:7b",
+	"gemma2:2b", "gemma2:9b", "codellama:7b",
+}
+
+func isSmallModel(modelName string) bool {
+	modelLower := strings.ToLower(modelName)
+	for _, smallModel := range SmallModelNames {
+		if strings.Contains(modelLower, strings.ToLower(smallModel)) {
+			return true
+		}
 	}
 
+	if strings.Contains(modelLower, ":4b") || strings.Contains(modelLower, ":3b") ||
+		strings.Contains(modelLower, ":2b") || strings.Contains(modelLower, ":1.5b") {
+		return true
+	}
+	if strings.Contains(modelLower, ":7b") || strings.Contains(modelLower, ":8b") {
+		return true
+	}
+	return false
+}
+
+func isBasicGreeting(input string) bool {
+	inputLower := strings.ToLower(strings.TrimSpace(input))
+	for _, greeting := range BasicGreetings {
+		if inputLower == greeting ||
+			inputLower == greeting+"?" ||
+			inputLower == greeting+"!" ||
+			inputLower == greeting+"." {
+			return true
+		}
+	}
+
+	return false
+}
+
+func containsTaskKeywords(input string) bool {
+	inputLower := strings.ToLower(input)
+
+	taskKeywords := []string{
+		"oku", "yaz", "sil", "listele", "ara", "kaydet", "indir", "yükley",
+		"dosya", "klasör", "dizin", "path", "file", "folder",
+		"kod", "code", "script", "python", "go", "java", "javascript",
+		"düzenle", "test", "debug", "fix", "compile", "build",
+		"çalıştır", "run", "execute", "terminal", "cmd", "shell",
+		"sistem", "system", "install", "kur", "update", "güncelle",
+		"ssh", "github", "git", "clone", "pull", "push",
+		"ağ", "network", "ping", "scan", "port",
+		"veritabanı", "database", "sql", "query", "sorgu",
+		"görev", "task", "iş", "plan", "schedule", "zamanla",
+		"whatsapp", "mesaj", "gönder", "resim", "fotoğraf",
+		"fs_", "sys_", "db_", "ssh_", "whatsapp_", "browser_",
+		"dev_studio", "edit_", "delete_", "create_", "update_", "list_",
+		"oracle_index", "ask_oracle", "ask_codebase",
+	}
+
+	for _, keyword := range taskKeywords {
+		if strings.Contains(inputLower, keyword) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
+}
+
+func (a *Pars) generatePlan(ctx context.Context, input string) (string, error) {
+	logger.Debug("🚀 [Planner] generatePlan başlatıldı")
+
+	if a == nil {
+		return "NO_PLAN_NEEDED", nil
+	}
 	if a.Brain == nil {
-		logger.Error("❌ [Planner] Brain nil, plan oluşturulamadı")
 		return "NO_PLAN_NEEDED", fmt.Errorf("brain uninitialized")
 	}
 
-	if a.Config == nil {
-		logger.Debug("⚠️ [Planner] Config nil, varsayılan değerler kullanılıyor")
-	}
-
-	if a.Skills == nil {
-		logger.Debug("⚠️ [Planner] Skills nil, boş tool listesi kullanılıyor")
-	}
-
-	// 🚨 DÜZELTME #2: Input validation
-	if strings.TrimSpace(input) == "" {
-		logger.Debug("⚠️ [Planner] Boş input, plan atlandı")
+	input = strings.TrimSpace(input)
+	if input == "" {
 		return "NO_PLAN_NEEDED", nil
 	}
 
-	// 🚨 DÜZELTME #3: Context timeout ekle (Planlama çok uzun sürmesin)
-	planCtx, cancel := context.WithTimeout(ctx, PlanGenerationTimeout)
+	logger.Debug("📥 [Planner] Input alındı: %d karakter", len(input))
+
+	if isBasicGreeting(input) && !containsTaskKeywords(input) {
+		logger.Debug("✅ [Planner] Basit selamlaşma tespit edildi → Chat Mode")
+		return "NO_PLAN_NEEDED", nil
+	}
+
+	modelName := ""
+	if a.Config != nil {
+		modelName = a.Config.Brain.Primary.ModelName
+	}
+
+	isSmall := isSmallModel(modelName)
+	planCtx, cancel := context.WithTimeout(ctx, config.PlanGenerationTimeout)
 	defer cancel()
 
-	// İkincil beyin durumunu kontrol et
 	secondaryStatus := "Devre dışı"
-	// 🚨 DÜZELTME #4: Nested nil check
 	if a.Config != nil && a.Config.Brain.Secondary.Enabled {
 		secondaryStatus = fmt.Sprintf("AKTİF (Model: %s)", a.Config.Brain.Secondary.ModelName)
 	}
 
-	// Araçları bellek adresi yerine isimleriyle listele
 	var toolListStr string
 	if a.Skills != nil {
 		tools := a.Skills.ListTools()
@@ -70,65 +140,140 @@ func (a *Pars) generatePlan(ctx context.Context, input string) (string, error) {
 		toolListStr = strings.Join(toolNames, ", ")
 	}
 
-	// 🚨 DÜZELTME #5: Prompt dosya yolunu work_dir'e göre çöz
-	promptPath := "prompts/Planner.txt"
-	if a.Config != nil && a.Config.App.WorkDir != "" {
-		promptPath = filepath.Join(a.Config.App.WorkDir, "prompts", "Planner.txt")
-	}
+	plannerPrompt := fmt.Sprintf(`Kullanıcı Talebi: "%s"
 
-	// Promptu dışarıdaki dosyadan okuyoruz
-	promptBytes, err := os.ReadFile(promptPath)
-	if err != nil {
-		logger.Warn("⚠️ [Planner] Prompt dosyası bulunamadı (%s). Acil durum sohbet moduna geçiliyor. Hata: %v", promptPath, err)
-		// Dosya yoksa sistemi çökertmek yerine güvenli liman olan sohbete geçelim
-		return "NO_PLAN_NEEDED", nil
-	}
+Mevcut Araçlar: %s
+İkincil Beyin Durumu: %s
 
-	// 🚨 DÜZELTME #6: Dosya boş mu kontrol et
-	if len(promptBytes) == 0 {
-		logger.Warn("⚠️ [Planner] Prompt dosyası boş (%s)", promptPath)
-		return "NO_PLAN_NEEDED", nil
-	}
+Görev: Bu talebi yerine getirmek için kullanılacak araçları belirle. 
+Eğer bu bir sohbet veya bilgi sorusu ise ve araç gerektirmiyorsa SADECE "NO_PLAN_NEEDED" yaz.
+Eğer bir işlem veya araç kullanımı gerekiyorsa, adım adım bir checklist oluştur.`, input, toolListStr, secondaryStatus)
+/*
+	systemContent := `Sen Pars'ın niyet analiz motorusun. Görevin kullanıcının isteğini analiz edip DOĞRU ÇALIŞMA MODUNU seçmek.
 
-	// Dosyadan okunan metni argümanlarla formatla
-	plannerPrompt := fmt.Sprintf(string(promptBytes), input, toolListStr, secondaryStatus)
+🧠 KARAR KRİTERLERİ:
+
+1️⃣ CHAT MODE (SADECE NO_PLAN_NEEDED döndür):
+   - Selamlaşma, kişisel sorular
+   - Tool gerektirmeyen her şey
+
+2️⃣ TASK MODE (Markdown checklist plan üret):
+   - Herhangi bir işlem, tool (araç) gerektiren istekler.
+
+⚠️ KURALLAR:
+- ASLA yorum yapma, direkt çıktı ver.
+- Tool ismi geçiyorsa KESİNLİKLE TASK MODE seç.`
+
+	if isSmall {
+		systemContent = `Sen niyet analiz motorusun. SADECE iki seçeneğin var:
+1. CHAT MODE → SADECE 'NO_PLAN_NEEDED' yaz
+2. TASK MODE → Markdown checklist plan üret
+
+⚠️ KURAL: Tool ismi veya eylem varsa TASK MODE üret. Asla açıklama yapma.`
+	}
+5️⃣6️⃣7️⃣8️⃣9️⃣0️⃣1️⃣2️⃣3️⃣
+	
+	*/
+	systemContent := `Sen Pars'ın niyet analiz motorusun. Görevin kullanıcının isteğini analiz edip DOĞRU ÇALIŞMA MODUNU seçmek.
+
+🧠 KARAR KRİTERLERİ:
+
+1️⃣ CHAT MODE (SADECE NO_PLAN_NEEDED döndür):
+   - Selamlaşma, kişisel sorular
+   - Tool gerektirmeyen her şey
+
+2️⃣ TASK MODE (Ultra-Minimal Plan Üret):
+   - Herhangi bir işlem veya tool gerektiren istekler.
+
+4️⃣ KULLANILABİLİR ARAÇLAR
+   - Kullanılabilir araçlar için db/pars_tool.db içindeki bilgileri db_query aracını kullanarak oku
+   - Araçların açıklamParametre sütunundaki bilgileri kullanarak araçlar için gerekli parametreleri oluştur.
+
+⚠️ TASK MODE FORMAT KURALLARI (ÖLÜMCÜL ÖNEMDE):
+- Plan MAKSİMUM 3-4 satır olmalıdır.
+- SADECE bir markdown checklist oluştur.
+- ASLA başlık (##), alt başlık (###), ayırıcı çizgi (---) veya paragraf KULLANMA.
+- ASLA "Amaç", "Adım 1", "Sonuç" gibi kelimeler KULLANMA.
+- SADECE şu formatı birebir uygula:
+  - [ ] fs_list: Klasör yapısını tara.
+  - [ ] oracle_index: Dosyaları hafızaya al.`
+
+	if isSmall {
+		systemContent = `Sen niyet analiz motorusun. SADECE iki seçeneğin var:
+1. CHAT MODE → SADECE 'NO_PLAN_NEEDED' yaz
+2. TASK MODE → SADECE ve SADECE kullanılacak araçların 2-3 satırlık checklist'ini yaz.
+
+⚠️ TASK KURALI: Asla başlık (##), paragraf veya açıklama yazma. SADECE maddeler halinde araçları listele. Örnek:
+- [ ] fs_list: Klasörü tara.
+- [ ] oracle_index: İndeksle.`
+	}
 
 	history := []kernel.Message{
-		{
-			Role:    "system",
-			Content: "Sen deterministik bir niyet analiz motorusun. Kullanıcı isteği tool gerektirmeyen basit sohbet veya tek adımlık bir soruysa SADECE 'NO_PLAN_NEEDED' döndür. Eğer kod, dosya, sistem işlemi veya tool kullanımı gerektiren görev varsa Markdown checklist plan üret. Asla ikisini birden üretme ve yorum yapma.",
-		},
+		{Role: "system", Content: systemContent},
 		{Role: "user", Content: plannerPrompt},
 	}
 
-	logger.Debug("🧠 [Planner] Plan oluşturuluyor... Input: %d karakter", len(input))
-
 	resp, err := a.Brain.Chat(planCtx, history, nil)
 	if err != nil {
-		logger.Error("❌ [Planner] Brain chat hatası: %v", err)
 		return "NO_PLAN_NEEDED", fmt.Errorf("plan oluşturma hatası: %w", err)
 	}
 
 	plan := strings.TrimSpace(resp.Content)
-
-	// 🚨 DÜZELTME #7: Response validation
 	if plan == "" {
-		logger.Warn("⚠️ [Planner] Brain boş response döndürdü")
 		return "NO_PLAN_NEEDED", nil
 	}
 
-	// 🚨 DÜZELTME #8: Plan geçerli mi kontrol et (NO_PLAN_NEEDED veya checklist)
-	if strings.Contains(plan, "NO_PLAN_NEEDED") {
-		logger.Debug("✅ [Planner] Sohbet modu tespit edildi, plan atlandı")
+	planLower := strings.ToLower(plan)
+	logger.Debug("🔍 [Planner] Plan lowercase: '%s'", planLower)
+
+	// 🔥 DÜZELTME 1: KESİN OVERRIDE (ÜSTE ALINDI)
+	// Eğer input içinde task keyword varsa (oracle_index vb.), 
+	// modelin gevezelik edip "no_plan_needed" demesini KESİNLİKLE YOK SAY!
+	if containsTaskKeywords(input) {
+		logger.Debug("✅ [Planner] Task keyword var, model kararı bypass ediliyor → Task Mode")
+		if len(plan) > 10000 {
+			plan = plan[:5000]
+		}
+		return plan, nil
+	}
+
+	// Eğer üstteki "keyword" kuralına takılmadıysa, modelin chat mode kararına saygı duy
+	if strings.Contains(planLower, "no_plan_needed") ||
+		strings.Contains(planLower, "no plan needed") ||
+		strings.Contains(planLower, "chat mode") ||
+		strings.Contains(planLower, "sohbet modu") {
+		logger.Debug("✅ [Planner] Model chat mode karar verdi, plan atlandı")
 		return "NO_PLAN_NEEDED", nil
 	}
 
-	// 🚨 DÜZELTME #9: Plan Markdown checklist formatında mı kontrol et (basit validation)
-	if !strings.Contains(plan, "- [ ]") && !strings.Contains(plan, "- [x]") && !strings.Contains(plan, "**") {
-		logger.Debug("⚠️ [Planner] Plan formatı beklenen checklist formatında değil, sohbet moduna geçiliyor")
+	hasChecklist := strings.Contains(plan, "- [ ]") ||
+		strings.Contains(plan, "- [x]") ||
+		strings.Contains(plan, "**") ||
+		strings.Contains(plan, "###") ||
+		strings.Contains(planLower, "1.")
+
+	if !hasChecklist {
+		if isSmall {
+			if len(plan) > 10000 {
+				plan = plan[:5000]
+			}
+			return plan, nil
+		}
 		return "NO_PLAN_NEEDED", nil
 	}
 
-	logger.Success("📝 [Planner] Harekât planı oluşturuldu: %d karakter", len(plan))
+	if len(plan) > 10000 {
+		plan = plan[:5000]
+	}
+
 	return plan, nil
+}
+
+func GetPlannerStats() map[string]interface{} {
+	return map[string]interface{}{
+		"basic_greetings_count": len(BasicGreetings),
+		"small_models_count":    len(SmallModelNames),
+		"decision_mechanism":    "model_based",
+		"timestamp":             time.Now().Format("15:04:05"),
+	}
 }

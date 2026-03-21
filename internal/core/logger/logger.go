@@ -1,5 +1,3 @@
-// internal/core/logger/logger.go
-// 🚀 DÜZELTME V3: RWMutex Deadlock TAMAMEN ÇÖZÜLDÜ
 package logger
 
 import (
@@ -12,9 +10,6 @@ import (
 	"time"
 )
 
-// ========================================================================
-// 🎨 TERMINAL COLOR CODES
-// ========================================================================
 const (
 	ColorReset  = "\033[0m"
 	ColorRed    = "\033[31m"
@@ -26,25 +21,55 @@ const (
 	ColorWhite  = "\033[37m"
 )
 
-// LogHook: Log mesajlarını dinleyen callback fonksiyonu
 type LogHook func(level, message string)
-
-// HookEntry - Hook'u ID ile takip etmek için yapı
 type HookEntry struct {
 	ID   int
 	Hook LogHook
 }
 
+type hookJob struct {
+	level   string
+	message string
+}
+
 var (
-	debugMode       bool
-	logFile         *os.File
-	multiWriter     io.Writer
-	publishHooks    []HookEntry
-	hookMu          sync.RWMutex
-	hookIDCounter   int = 0
+	debugMode      bool
+	logFile        *os.File
+	multiWriter    io.Writer
+	publishHooks   []HookEntry
+	hookMu         sync.RWMutex
+	hookIDCounter  int = 0
+	hookJobChan  chan hookJob
+	hookStopChan chan struct{}
+	workerOnce   sync.Once
 )
 
-// AddOutputHook: Yeni hook ekler ve benzersiz ID döner
+func startHookWorker() {
+	hookJobChan = make(chan hookJob, 1000) 
+	hookStopChan = make(chan struct{})
+
+	go func() {
+		for {
+			select {
+			case job := <-hookJobChan:
+				hookMu.RLock()
+				hooksToCall := make([]LogHook, 0, len(publishHooks))
+				for _, entry := range publishHooks {
+					if entry.Hook != nil {
+						hooksToCall = append(hooksToCall, entry.Hook)
+					}
+				}
+				hookMu.RUnlock()
+				for _, hook := range hooksToCall {
+					hook(job.level, job.message)
+				}
+			case <-hookStopChan:
+				return
+			}
+		}
+	}()
+}
+
 func AddOutputHook(hook LogHook) int {
 	if hook == nil {
 		return -1
@@ -60,15 +85,12 @@ func AddOutputHook(hook LogHook) int {
 	
 	currentID := hookIDCounter
 	currentTotal := len(publishHooks)
-	
-	// 🚀 KİLİDİ LOG YAZMADAN ÖNCE AÇIYORUZ! (Deadlock'u önler)
 	hookMu.Unlock()
 	
 	Debug("📡 [Logger] Hook eklendi: ID=%d, Toplam=%d", currentID, currentTotal)
 	return currentID
 }
 
-// RemoveOutputHook - Hook'u ID ile sil
 func RemoveOutputHook(id int) bool {
 	if id <= 0 {
 		return false
@@ -77,37 +99,30 @@ func RemoveOutputHook(id int) bool {
 	hookMu.Lock()
 	for i, entry := range publishHooks {
 		if entry.ID == id {
-			// Slice'dan sil
 			publishHooks = append(publishHooks[:i], publishHooks[i+1:]...)
 			currentTotal := len(publishHooks)
-			
-			// 🚀 KİLİDİ AÇ
 			hookMu.Unlock()
 			
 			Debug("🗑️ [Logger] Hook silindi: ID=%d, Kalan=%d", id, currentTotal)
 			return true
 		}
 	}
-	// Bulunamadıysa kilidi aç ve dön
 	hookMu.Unlock()
 	
 	Warn("⚠️ [Logger] Silinecek hook bulunamadı: ID=%d", id)
 	return false
 }
 
-// GetHookCount - Debug için hook sayısı
 func GetHookCount() int {
 	hookMu.RLock()
 	defer hookMu.RUnlock()
 	return len(publishHooks)
 }
 
-// ClearAllHooks - Tüm hook'ları temizle
 func ClearAllHooks() {
 	hookMu.Lock()
 	count := len(publishHooks)
 	publishHooks = nil
-	// 🚀 KİLİDİ AÇ
 	hookMu.Unlock()
 	
 	Debug("🧹 [Logger] Tüm hook'lar temizlendi: %d adet", count)
@@ -127,61 +142,54 @@ func Setup(debug bool, logDir string) {
 		return
 	}
 	logFile = f
+	workerOnce.Do(func() {
+		startHookWorker()
+	})
 	
 	Debug("📝 [Logger] Log sistemi başlatıldı: %s", path)
 }
 
 func logMessage(color, level, msg string) {
 	timestamp := time.Now().Format("15:04:05")
-	
-	// Terminal için Renkli Format
 	consoleMsg := fmt.Sprintf("%s[%-7s]%s %s %s\n", color, level, ColorReset, timestamp, msg)
-	
-	// Dosya Saklama için Sade Format
 	fileMsg := fmt.Sprintf("[%s] [%-7s] %s\n", time.Now().Format("2006-01-02 15:04:05"), level, msg)
 
+	isError := (level == "ERROR" || level == "ALERT")
+
+	// Konsol Çıktısı: Sadece önemli olaylar gösterilsin (INFO ve DEBUG gizlendi, terminal temizlendi)
 	showOnConsole := false
 	switch level {
 	case "ACTION", "WARN", "ERROR", "ALERT", "SUCCESS":
 		showOnConsole = true
-	case "DEBUG", "INFO":
-		showOnConsole = debugMode
 	}
 
-	// 1. Konsola Yaz
 	if showOnConsole {
 		fmt.Print(consoleMsg)
 	}
 
-	// 2. Dosyaya Yaz
-	if logFile != nil {
+	// DOSYA LOGLAMA: SADECE HATALAR (Kritik optimizasyon: Gereksiz I/O engellendi)
+	if isError && logFile != nil {
 		_, err := logFile.WriteString(fileMsg)
 		if err != nil {
 			fmt.Printf("⚠️ [Logger] Dosya yazma hatası: %v\n", err)
 		}
 	}
 
-	// 3. Hook'lara Gönder (Kilit Yönetimi)
-	cleanMsg := strings.ReplaceAll(msg, "\033", "") 
-	
-	hookMu.RLock()
-	hooksToCall := make([]LogHook, 0, len(publishHooks))
-	for _, entry := range publishHooks {
-		if entry.Hook != nil {
-			hooksToCall = append(hooksToCall, entry.Hook)
-		}
-	}
-	hookMu.RUnlock()
-	
-	// Hook'ları kilit dışında çağır (deadlock önleme)
-	for _, hook := range hooksToCall {
-		if level == "ACTION" || level == "ALERT" || level == "ERROR" || level == "WARN" || level == "SUCCESS" {
-			go hook(level, cleanMsg)
+	// IPC / Stream için hook mekanizması (Terminal UI'ın bozulmaması için INFO/DEBUG hariç devam ediyor)
+	if level == "ACTION" || level == "ALERT" || level == "ERROR" || level == "WARN" || level == "SUCCESS" {
+		cleanMsg := strings.ReplaceAll(msg, "\033", "") 
+		if hookJobChan != nil {
+			select {
+			case hookJobChan <- hookJob{level: level, message: cleanMsg}:
+			default:
+				if isError {
+					fmt.Println("⚠️ [Logger] Uyarı: Log kuyruğu dolu, bildirim atlandı!")
+				}
+			}
 		}
 	}
 }
 
-// Standart Arayüzler
 func Info(format string, v ...interface{})    { logMessage(ColorBlue, "INFO", fmt.Sprintf(format, v...)) }
 func Success(format string, v ...interface{}) { logMessage(ColorGreen, "SUCCESS", fmt.Sprintf(format, v...)) }
 func Action(format string, v ...interface{})  { logMessage(ColorPurple, "ACTION", fmt.Sprintf(format, v...)) }
@@ -192,6 +200,10 @@ func Alert(format string, v ...interface{})   { logMessage(ColorRed, "ALERT", fm
 
 func Close() {
 	ClearAllHooks()
+	if hookStopChan != nil {
+		close(hookStopChan)
+	}
+
 	if logFile != nil {
 		err := logFile.Close()
 		if err != nil {
@@ -199,5 +211,6 @@ func Close() {
 		}
 		logFile = nil
 	}
-	Debug("🛑 [Logger] Logger kapatıldı")
+	// Son mesaj konsola özel gönderiliyor
+	fmt.Println("🛑 [Logger] Logger kapatıldı")
 }

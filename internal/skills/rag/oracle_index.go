@@ -1,4 +1,4 @@
-package rag //coding
+package rag
 
 import (
 	"context"
@@ -6,8 +6,8 @@ import (
 	"github.com/aydndglr/pars-agent-v3/internal/memory"
 )
 
-// OracleIndexTool: Sadece resmi dil dokümanlarını pars_docs.db içine gömmek için kullanılır.
-type OracleIndexTool struct {
+
+type OracleIndexTool struct { 
 	DocStore *memory.SQLiteStore 
 }
 

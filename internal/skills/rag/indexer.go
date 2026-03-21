@@ -15,11 +15,11 @@ import (
 	"github.com/aydndglr/pars-agent-v3/internal/core/logger"
 	"github.com/aydndglr/pars-agent-v3/internal/memory"
 	"github.com/aydndglr/pars-agent-v3/internal/skills/filesystem"
-	"github.com/ledongthuc/pdf" // 🚀 PDF Okuma Motoru
+	"github.com/ledongthuc/pdf"
 )
 
 type IndexerTool struct {
-	Store *memory.SQLiteStore // RAG (FTS5) veritabanı bağlantısı
+	Store *memory.SQLiteStore 
 }
 
 func (t *IndexerTool) Name() string { return "fs_index" }
@@ -56,7 +56,6 @@ func (t *IndexerTool) Execute(ctx context.Context, args map[string]interface{}) 
 		}
 	}
 
-	// Hafıza Temizliği Kontrolü (Proje Bazlı)
 	clearMem := true
 	if val, ok := args["clear_memory"].(bool); ok {
 		clearMem = val
@@ -75,7 +74,7 @@ func (t *IndexerTool) Execute(ctx context.Context, args map[string]interface{}) 
 
 	fileCount := 0
 	chunkCount := 0
-	chunkSize := 50 // Her lokma 50 satır
+	chunkSize := 50 
 
 	err := filepath.WalkDir(targetPath, func(p string, d fs.DirEntry, err error) error {
 		if err != nil { return nil }
@@ -87,7 +86,6 @@ func (t *IndexerTool) Execute(ctx context.Context, args map[string]interface{}) 
 		}
 
 		name := strings.ToLower(d.Name())
-		// Sadece çalıştırılabilir/medya dosyalarını atla. (.pdf ve .docx ARTIK SERBEST!)
 		if strings.HasSuffix(name, ".exe") || strings.HasSuffix(name, ".png") || strings.HasSuffix(name, ".jpg") || strings.HasSuffix(name, ".dll") || strings.HasSuffix(name, ".zip") {
 			return nil
 		}
@@ -102,7 +100,6 @@ func (t *IndexerTool) Execute(ctx context.Context, args map[string]interface{}) 
 			if !match { return nil }
 		}
 
-		// 🚀 DOSYA TÜRÜNE GÖRE AKILLI OKUMA MOTORU
 		var rawContent string
 		var readErr error
 
@@ -111,14 +108,14 @@ func (t *IndexerTool) Execute(ctx context.Context, args map[string]interface{}) 
 		} else if strings.HasSuffix(name, ".docx") {
 			rawContent, readErr = extractTextFromDOCX(p)
 		} else {
-			// Klasik kod / metin / csv okuma
+
 			b, e := os.ReadFile(p)
 			rawContent = string(b)
 			readErr = e
 		}
 
 		if readErr != nil || strings.TrimSpace(rawContent) == "" {
-			return nil // Okunamayanları sessizce atla
+			return nil 
 		}
 
 		lines := strings.Split(strings.ReplaceAll(rawContent, "\r\n", "\n"), "\n")
@@ -130,7 +127,6 @@ func (t *IndexerTool) Execute(ctx context.Context, args map[string]interface{}) 
 			chunkContent := strings.Join(lines[i:end], "\n")
 			if strings.TrimSpace(chunkContent) == "" { continue }
 
-			// SQLite FTS5 tablosuna 'project_name' etiketiyle göm
 			t.Store.AddCodeChunk(ctx, projectName, p, chunkContent, i+1, end)
 			chunkCount++
 		}
@@ -146,11 +142,6 @@ func (t *IndexerTool) Execute(ctx context.Context, args map[string]interface{}) 
 	return fmt.Sprintf("✅ BAŞARILI: '%s' dizini '%s' proje adıyla zihne başarıyla arşivlendi. İçeriğinde anlamsal arama yapmak için 'ask_codebase' aracını kullanabilirsin.", targetPath, projectName), nil
 }
 
-// =====================================================================
-// 📄 GELİŞMİŞ BELGE ÇIKARMA MOTORLARI (METİN AYIKLAYICILAR)
-// =====================================================================
-
-// extractTextFromPDF: PDF Dosyalarından metinleri kazır
 func extractTextFromPDF(path string) (string, error) {
 	f, r, err := pdf.Open(path)
 	if err != nil {
@@ -167,7 +158,6 @@ func extractTextFromPDF(path string) (string, error) {
 	return buf.String(), nil
 }
 
-// extractTextFromDOCX: Microsoft Word dosyalarından XML katmanını soyup saf metni çıkarır (Sıfır Dış Kütüphane!)
 func extractTextFromDOCX(path string) (string, error) {
 	r, err := zip.OpenReader(path)
 	if err != nil {
@@ -193,10 +183,9 @@ func extractTextFromDOCX(path string) (string, error) {
 		return "", fmt.Errorf("Geçerli bir Word dokümanı değil")
 	}
 
-	// XML etiketlerini temizle ve sadece okunabilir metni bırak
 	re := regexp.MustCompile(`<[^>]*>`)
 	text := re.ReplaceAllString(xmlContent, " ")
-	text = strings.ReplaceAll(text, "  ", " ") // Çift boşlukları düzelt
+	text = strings.ReplaceAll(text, "  ", " ") 
 	
 	return text, nil
 }

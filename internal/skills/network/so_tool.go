@@ -33,7 +33,6 @@ func (t *StackOverflowTool) Parameters() map[string]interface{} {
 	}
 }
 
-// 🛡️ API YANIT YAPILARI
 type SOQuestion struct {
 	QuestionID       int    `json:"question_id"`
 	Title            string `json:"title"`
@@ -55,7 +54,6 @@ func (t *StackOverflowTool) Execute(ctx context.Context, args map[string]interfa
 
 	logger.Action("🔍 SO İstihbaratı Aranıyor: '%s'", query)
 
-	// 1. AŞAMA: SORULARI ARA
 	searchURL := fmt.Sprintf("https://api.stackexchange.com/2.3/search/advanced?order=desc&sort=relevance&q=%s&site=stackoverflow", url.QueryEscape(query))
 	if tags != "" {
 		searchURL += "&tagged=" + url.QueryEscape(tags)
@@ -86,11 +84,9 @@ func (t *StackOverflowTool) Execute(ctx context.Context, args map[string]interfa
 	sb.WriteString(fmt.Sprintf("🔍 StackOverflow Sonuçları: '%s'\n", query))
 	sb.WriteString(strings.Repeat("-", 60) + "\n")
 
-	// 2. AŞAMA: EN İYİ ÇÖZÜMÜ (ACCEPTED ANSWER) BUL VE ÇEK
 	var bestAnswerBody string
 	var bestAnswerTitle string
 
-	// İlk 3 soru içinde "Kabul Edilmiş Cevap" (Accepted Answer) arıyoruz
 	for _, item := range searchResult.Items {
 		if item.AcceptedAnswerID != 0 {
 			answerURL := fmt.Sprintf("https://api.stackexchange.com/2.3/answers/%d?order=desc&sort=activity&site=stackoverflow&filter=withbody", item.AcceptedAnswerID)
@@ -108,13 +104,12 @@ func (t *StackOverflowTool) Execute(ctx context.Context, args map[string]interfa
 				if len(answerResult.Items) > 0 {
 					bestAnswerTitle = item.Title
 					bestAnswerBody = cleanHTMLToMarkdown(answerResult.Items[0].Body)
-					break // İlk ve en iyi çözümü bulduk, döngüden çık!
+					break 
 				}
 			}
 		}
 	}
 
-	// 3. AŞAMA: RAPORU HAZIRLA (LLM İçin Optimizasyon)
 	if bestAnswerBody != "" {
 		sb.WriteString(fmt.Sprintf("🏆 EN İYİ ÇÖZÜM BULUNDU (Kabul Edilen Yanıt)\n"))
 		sb.WriteString(fmt.Sprintf("Soru: %s\n\n", bestAnswerTitle))
@@ -137,30 +132,23 @@ func (t *StackOverflowTool) Execute(ctx context.Context, args map[string]interfa
 	return sb.String(), nil
 }
 
-// 🛡️ HTML TO MARKDOWN CLEANER (LLM Zırhı)
-// StackOverflow API'den gelen HTML body'sini, Pars'in beynini yormayacak
-// saf bir Markdown (Code snippet) formatına çevirir.
 func cleanHTMLToMarkdown(htmlStr string) string {
-	// 1. Kod bloklarını korumaya al
-	s := strings.ReplaceAll(htmlStr, "<pre><code>", "\n```python\n") // Genel bir markdown belirteci koyuyoruz
+
+	s := strings.ReplaceAll(htmlStr, "<pre><code>", "\n```python\n") 
 	s = strings.ReplaceAll(s, "</code></pre>", "\n```\n")
 	s = strings.ReplaceAll(s, "<code>", "`")
 	s = strings.ReplaceAll(s, "</code>", "`")
-	
-	// 2. Paragraf ve boşlukları ayarla
+
 	s = strings.ReplaceAll(s, "<p>", "")
 	s = strings.ReplaceAll(s, "</p>", "\n\n")
 	s = strings.ReplaceAll(s, "<br>", "\n")
 	s = strings.ReplaceAll(s, "<br/>", "\n")
 	
-	// 3. Geriye kalan tüm pis HTML etiketlerini (<a>, <strong> vb) sil
 	re := regexp.MustCompile(`<[^>]*>`)
 	s = re.ReplaceAllString(s, "")
 	
-	// 4. HTML karakterlerini (örn: &lt; -> < ) normale çevir
 	s = html.UnescapeString(s)
 	
-	// İçerik çok uzunsa Pars'in jetonlarını patlatmamak için kırp (Guardrail)
 	if len(s) > 3000 {
 		s = s[:3000] + "\n\n...(Çözümün devamı çok uzun olduğu için kesildi)..."
 	}

@@ -1,22 +1,14 @@
-// internal/skills/kangal/kangal.go
-// 🚀 DÜZELTME: Watchdog oluştururken primaryConfig parametresi eklendi
-
 package kangal
 
 import (
 	"context"
 	"fmt"
 	"sync"
-	//"time"
-
 	"github.com/aydndglr/pars-agent-v3/internal/core/config"
 	"github.com/aydndglr/pars-agent-v3/internal/core/kernel"
 	"github.com/aydndglr/pars-agent-v3/internal/core/logger"
 )
 
-// ========================================================================
-// 🐕 KANGAL YAPISI
-// ========================================================================
 type Kangal struct {
 	Config         *config.KangalConfig
 	PrimaryConfig  *config.Config       
@@ -34,11 +26,7 @@ type Kangal struct {
 	contextTracker *ContextTracker
 }
 
-// ========================================================================
-// 🆕 YENİ: Kangal Oluşturucu (GÜNCELLENDİ)
-// ========================================================================
 func NewKangal(cfg *config.KangalConfig, primaryConfig *config.Config, agent kernel.Agent, eventChan chan<- string) *Kangal {
-	// 🚨 DÜZELTME #1: Nil kontrolleri
 	if cfg == nil {
 		logger.Error("❌ [Kangal] Config nil! Kangal oluşturulamadı.")
 		return nil
@@ -49,19 +37,17 @@ func NewKangal(cfg *config.KangalConfig, primaryConfig *config.Config, agent ker
 		return nil
 	}
 	
-	// 🚨 KRİTİK: Config enabled kontrolü
 	if !cfg.Enabled {
 		logger.Info("🐕 [Kangal] Config'de disabled, pasif modda")
 		return &Kangal{
-			Config:        cfg,
-			PrimaryConfig: primaryConfig,
-			Agent:         agent,
-			EventChan:     eventChan,
-			isRunning:     false,
+			Config:         cfg,
+			PrimaryConfig:  primaryConfig,
+			Agent:          agent,
+			EventChan:      eventChan,
+			isRunning:      false,
 		}
 	}
 	
-	// 🚨 KRİTİK: watchdog_model boşsa logla
 	if cfg.WatchdogModel == "" {
 		logger.Warn("⚠️ [Kangal] watchdog_model boş, Kangal sınırlı çalışacak")
 	}
@@ -69,15 +55,14 @@ func NewKangal(cfg *config.KangalConfig, primaryConfig *config.Config, agent ker
 	logger.Info("🐕 [Kangal] Bekçi sistemi yapılandırılıyor...")
 	
 	return &Kangal{
-		Config:        cfg,
-		PrimaryConfig: primaryConfig,
-		Agent:         agent,
-		EventChan:     eventChan,
-		isRunning:     false,
+		Config:         cfg,
+		PrimaryConfig:  primaryConfig,
+		Agent:          agent,
+		EventChan:      eventChan,
+		isRunning:      false,
 	}
 }
 
-// Start: Kangal'ı başlatır
 func (k *Kangal) Start() error {
 	k.mu.Lock()
 	defer k.mu.Unlock()
@@ -87,7 +72,6 @@ func (k *Kangal) Start() error {
 		return fmt.Errorf("kangal zaten aktif")
 	}
 	
-	// 🚨 KRİTİK: Config enabled kontrolü
 	if !k.Config.Enabled {
 		logger.Info("🐕 [Kangal] Config'de disabled, başlatılmadı")
 		return fmt.Errorf("kangal config'de disabled")
@@ -108,31 +92,24 @@ func (k *Kangal) Start() error {
 		k.Config.SensitivityLevel, k.Config.WatchdogModel)
 	return nil
 }
-// Stop: Kangal'ı durdurur
+
 func (k *Kangal) Stop() {
 	k.mu.Lock()
 	defer k.mu.Unlock()
-	
 	if !k.isRunning {
 		logger.Debug("ℹ️ [Kangal] Zaten durmuş")
 		return
 	}
-	
 	logger.Info("🛑 [Kangal] Bekçi sistemi durduruluyor...")
-	
-	// Context iptal et
 	if k.cancel != nil {
 		k.cancel()
 	}
-	
-	// Alt modülleri durdur
 	k.stopSubModules()
 	
 	k.isRunning = false
 	logger.Success("✅ [Kangal] Bekçi sistemi güvenli şekilde kapatıldı")
 }
 
-// initSubModules: Alt modülleri başlatır (watchdog güncellendi)
 func (k *Kangal) initSubModules() error {
 	var err error
 	
@@ -151,7 +128,6 @@ func (k *Kangal) initSubModules() error {
 		logger.Warn("⚠️ [Kangal] NotificationEngine başlatılamadı: %v", err)
 	}
 	
-	// 🚨 DÜZELTME: Watchdog artık primaryConfig alıyor
 	k.watchdog = NewWatchdog(k.ctx, k.Config, k.PrimaryConfig, k.Agent, k.notification)
 	if err := k.watchdog.Start(); err != nil {
 		logger.Warn("⚠️ [Kangal] Watchdog başlatılamadı: %v", err)
@@ -165,8 +141,6 @@ func (k *Kangal) initSubModules() error {
 	return err
 }
 
-
-// stopSubModules: Tüm alt modülleri durdurur
 func (k *Kangal) stopSubModules() {
 	if k.windowTracker != nil {
 		k.windowTracker.Stop()
@@ -185,17 +159,12 @@ func (k *Kangal) stopSubModules() {
 	}
 }
 
-// ========================================================================
-// 🆕 PUBLIC API (Dışarıdan erişim)
-// ========================================================================
-// IsRunning: Kangal'ın çalışıp çalışmadığını döndür
 func (k *Kangal) IsRunning() bool {
 	k.mu.RLock()
 	defer k.mu.RUnlock()
 	return k.isRunning
 }
 
-// GetStatus: Kangal durum raporunu döndür (debug için)
 func (k *Kangal) GetStatus() map[string]interface{} {
 	k.mu.RLock()
 	defer k.mu.RUnlock()
@@ -205,10 +174,8 @@ func (k *Kangal) GetStatus() map[string]interface{} {
 		"enabled":    k.Config.Enabled,
 		"sensitivity": k.Config.SensitivityLevel,
 		"watchdog_model": k.Config.WatchdogModel,
-		//"primary_model": k.Config.PrimaryModel,
 	}
 	
-	// Alt modül durumlarını ekle
 	if k.windowTracker != nil {
 		status["window_tracker"] = k.windowTracker.GetStatus()
 	}
@@ -228,35 +195,28 @@ func (k *Kangal) GetStatus() map[string]interface{} {
 	return status
 }
 
-// SetEnabled: Kangal'ı runtime'da aç/kapa
 func (k *Kangal) SetEnabled(enabled bool) {
 	k.mu.Lock()
-	defer k.mu.Unlock()
-	
 	if enabled == k.Config.Enabled {
-		return // Zaten istenen durumda
+		k.mu.Unlock()
+		return 
 	}
 	
 	k.Config.Enabled = enabled
+	wasRunning := k.isRunning
+	k.mu.Unlock()
 	
-	if enabled && !k.isRunning {
-		// Aç
+	if enabled && !wasRunning {
 		logger.Info("🐕 [Kangal] Runtime'da aktif ediliyor...")
-		k.mu.Unlock() // Lock'u bırak, Start kendi lock'unu alacak
 		_ = k.Start()
-		k.mu.Lock()
-	} else if !enabled && k.isRunning {
-		// Kapa
+	} else if !enabled && wasRunning {
 		logger.Info("🐕 [Kangal] Runtime'da kapatılıyor...")
-		k.mu.Unlock() // Lock'u bırak, Stop kendi lock'unu alacak
-		k.stopSubModules()
-		k.mu.Lock()
+		k.Stop()
 	}
 	
 	logger.Info("🐕 [Kangal] Enabled durumu değiştirildi: %v", enabled)
 }
 
-// SetSensitivity: Hassasiyet seviyesini değiştir (low, balanced, high)
 func (k *Kangal) SetSensitivity(level string) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
@@ -275,7 +235,6 @@ func (k *Kangal) SetSensitivity(level string) {
 	k.Config.SensitivityLevel = level
 	logger.Info("🐕 [Kangal] Sensitivity level değiştirildi: %s", level)
 	
-	// Alt modüllere bildir (gerekirse)
 	if k.windowTracker != nil {
 		k.windowTracker.SetSensitivity(level)
 	}
@@ -284,7 +243,6 @@ func (k *Kangal) SetSensitivity(level string) {
 	}
 }
 
-// TriggerManualScan: Manuel tarama tetikle (debug/test için)
 func (k *Kangal) TriggerManualScan() {
 	k.mu.RLock()
 	running := k.isRunning
@@ -296,8 +254,6 @@ func (k *Kangal) TriggerManualScan() {
 	}
 	
 	logger.Info("🐕 [Kangal] Manuel tarama tetiklendi...")
-	
-	// Tüm modüllere scan sinyali gönder
 	if k.windowTracker != nil {
 		k.windowTracker.TriggerScan()
 	}
@@ -306,10 +262,6 @@ func (k *Kangal) TriggerManualScan() {
 	}
 }
 
-// ========================================================================
-// 🆕 EVENT HANDLING (Sistem olaylarını işleme)
-// ========================================================================
-// HandleEvent: Dışarıdan gelen olayları işler (Event Bus'tan)
 func (k *Kangal) HandleEvent(eventType string, data map[string]interface{}) {
 	k.mu.RLock()
 	running := k.isRunning
@@ -323,24 +275,20 @@ func (k *Kangal) HandleEvent(eventType string, data map[string]interface{}) {
 	
 	switch eventType {
 	case "terminal_error":
-		// Terminal'den hata geldi
 		if k.errorDetector != nil {
 			k.errorDetector.ProcessTerminalError(data)
 		}
 	case "window_change":
-		// Aktif pencere değişti
 		if k.contextTracker != nil {
 			windowTitle, _ := data["window"].(string)
 			processName, _ := data["process"].(string)
 			k.contextTracker.UpdateActiveWindow(windowTitle, processName)
 		}
 	case "process_crash":
-		// Process çöktü
 		if k.errorDetector != nil {
 			k.errorDetector.ProcessCrash(data)
 		}
 	case "file_change":
-		// Dosya değişti (kod yazılırken)
 		if k.contextTracker != nil {
 			filePath, _ := data["path"].(string)
 			k.contextTracker.UpdateFileActivity(filePath)
@@ -350,10 +298,6 @@ func (k *Kangal) HandleEvent(eventType string, data map[string]interface{}) {
 	}
 }
 
-// ========================================================================
-// 🆕 HELPER FONKSİYONLAR
-// ========================================================================
-// sendAlert: Bildirim gönder (notification engine üzerinden)
 func (k *Kangal) sendAlert(priority string, title string, message string) {
 	if k.notification == nil {
 		logger.Warn("⚠️ [Kangal] Notification engine nil, alert gönderilemedi")
@@ -372,7 +316,6 @@ func (k *Kangal) sendAlert(priority string, title string, message string) {
 	k.notification.SendAlert(notifPriority, title, message)
 }
 
-// escalateToPrimary: Kritik olayı primary model'e escalat et (watchdog üzerinden)
 func (k *Kangal) escalateToPrimary(summary string, context map[string]interface{}) {
 	if k.watchdog == nil {
 		logger.Warn("⚠️ [Kangal] Watchdog nil, escalasyon yapılamadı")
@@ -382,30 +325,23 @@ func (k *Kangal) escalateToPrimary(summary string, context map[string]interface{
 	k.watchdog.Escalate(summary, context)
 }
 
-// ========================================================================
-// 🆕 GETTERS (Alt modüllere erişim için)
-// ========================================================================
-// GetWindowTracker: Window tracker'ı döndür
+
 func (k *Kangal) GetWindowTracker() *WindowTracker {
 	return k.windowTracker
 }
 
-// GetErrorDetector: Error detector'ı döndür
 func (k *Kangal) GetErrorDetector() *ErrorDetector {
 	return k.errorDetector
 }
 
-// GetNotification: Notification engine'i döndür
 func (k *Kangal) GetNotification() *NotificationEngine {
 	return k.notification
 }
 
-// GetWatchdog: Watchdog'u döndür
 func (k *Kangal) GetWatchdog() *Watchdog {
 	return k.watchdog
 }
 
-// GetContextTracker: Context tracker'ı döndür
 func (k *Kangal) GetContextTracker() *ContextTracker {
 	return k.contextTracker
 }

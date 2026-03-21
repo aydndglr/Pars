@@ -1,4 +1,4 @@
-package rag //filesystem
+package rag 
 
 import (
 	"context"
@@ -9,7 +9,7 @@ import (
 )
 
 type AskCodebaseTool struct {
-	Store *memory.SQLiteStore // RAG (FTS5) veritabanı bağlantısı
+	Store *memory.SQLiteStore 
 }
 
 func (t *AskCodebaseTool) Name() string { return "ask_codebase" }
@@ -23,7 +23,6 @@ func (t *AskCodebaseTool) Parameters() map[string]interface{} {
 		"type": "object",
 		"properties": map[string]interface{}{
 			"query": map[string]interface{}{"type": "string", "description": "Aranacak teknik kavram, kelime veya kod parçası (Örn: 'database connection', 'login handler')."},
-			// 🚀 YENİ FİLTRE PARAMETRESİ BURADA
 			"project_name": map[string]interface{}{"type": "string", "description": "Sadece belirli bir projede arama yapmak için proje adı (Örn: 'omni_erp', 'python_12_docs'). Boş bırakılırsa tüm indekslenmiş projelerde arama yapar."},
 			"limit": map[string]interface{}{"type": "integer", "description": "Getirilecek maksimum kod bloğu sayısı (Varsayılan: 3)."},
 		},
@@ -33,7 +32,7 @@ func (t *AskCodebaseTool) Parameters() map[string]interface{} {
 
 func (t *AskCodebaseTool) Execute(ctx context.Context, args map[string]interface{}) (string, error) {
 	query, _ := args["query"].(string)
-	projectName, _ := args["project_name"].(string) // Opsiyonel filtre
+	projectName, _ := args["project_name"].(string)
 	
 	limit := 3
 	if l, ok := args["limit"].(float64); ok {
@@ -44,7 +43,6 @@ func (t *AskCodebaseTool) Execute(ctx context.Context, args map[string]interface
 		return "⚠️ HATA: Aranacak bir 'query' belirtmelisin.", nil
 	}
 
-	// 🚀 Hafızadaki RAG tablosuna (FTS5) filtreli/filtresiz sorgu atıyoruz
 	chunks, err := t.Store.SearchCode(ctx, projectName, query, limit)
 	if err != nil {
 		return "", fmt.Errorf("RAG veritabanında arama yapılamadı: %v", err)
@@ -68,7 +66,6 @@ func (t *AskCodebaseTool) Execute(ctx context.Context, args map[string]interface
 	sb.WriteString(fmt.Sprintf("Bulunan en alakalı %d parça:\n%s\n\n", len(chunks), strings.Repeat("-", 40)))
 
 	for i, chunk := range chunks {
-		// Çıktıya hangi projeden bulduğunu da ekliyoruz
 		sb.WriteString(fmt.Sprintf("📦 **Proje:** `%s` | 📂 **Dosya:** `%s` (Satır: %d - %d)\n", chunk.ProjectName, chunk.FilePath, chunk.StartLine, chunk.EndLine))
 		sb.WriteString("```\n")
 		sb.WriteString(strings.TrimSpace(chunk.Content))

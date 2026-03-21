@@ -9,7 +9,7 @@ import (
 	"github.com/aydndglr/pars-agent-v3/internal/memory"
 )
 
-type ChatRecallTool struct {
+type ChatRecallTool struct { 
 	Store *memory.SQLiteStore
 }
 

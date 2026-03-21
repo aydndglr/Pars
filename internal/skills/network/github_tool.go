@@ -43,7 +43,6 @@ func (t *GitHubTool) Execute(ctx context.Context, args map[string]interface{}) (
 	switch action {
 	case "repo_info":
 		req, _ := http.NewRequestWithContext(ctx, "GET", baseURL, nil)
-		// req.Header.Set("Authorization", "Bearer SENIN_GITHUB_TOKENIN") // İleride private repolar için açabilirsin
 		
 		resp, err := client.Do(req)
 		if err != nil { return "", err }
@@ -64,7 +63,7 @@ func (t *GitHubTool) Execute(ctx context.Context, args map[string]interface{}) (
 
 	case "readme":
 		req, _ := http.NewRequestWithContext(ctx, "GET", baseURL+"/readme", nil)
-		req.Header.Set("Accept", "application/vnd.github.v3.raw") // Base64 yerine direkt raw metin almak için
+		req.Header.Set("Accept", "application/vnd.github.v3.raw")
 		
 		resp, err := client.Do(req)
 		if err != nil { return "", err }

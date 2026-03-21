@@ -10,7 +10,6 @@ import (
 	"github.com/aydndglr/pars-agent-v3/internal/core/logger"
 )
 
-// MonitorTask: Arka planda çalışan izleme görevi
 type MonitorTask struct {
 	Host     string
 	Interval time.Duration
@@ -67,7 +66,6 @@ func (t *NetworkMonitoringTool) Execute(ctx context.Context, args map[string]int
 	return "Geçersiz aksiyon balım.", nil
 }
 
-// scan: Detaylı tek seferlik analiz
 func (t *NetworkMonitoringTool) performDetailedScan(host string) (string, error) {
 	start := time.Now()
 	conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, "80"), 5*time.Second)
@@ -80,7 +78,6 @@ func (t *NetworkMonitoringTool) performDetailedScan(host string) (string, error)
 		conn.Close()
 	}
 
-	// Yaygın portları hızlıca kontrol edelim
 	ports := []string{"22", "80", "443", "3389", "8080"}
 	var openPorts []string
 	for _, port := range ports {
@@ -95,7 +92,6 @@ func (t *NetworkMonitoringTool) performDetailedScan(host string) (string, error)
 		host, status, latency, fmt.Sprintf("[%s]", fmt.Sprint(openPorts))), nil
 }
 
-// monitor_start: Arka plan döngüsünü başlatır
 func (t *NetworkMonitoringTool) startBackgroundMonitor(host string, interval time.Duration) (string, error) {
 	monitorMu.Lock()
 	if _, exists := activeMonitors[host]; exists {
@@ -106,29 +102,24 @@ func (t *NetworkMonitoringTool) startBackgroundMonitor(host string, interval tim
 	stopChan := make(chan struct{})
 	activeMonitors[host] = &MonitorTask{Host: host, Interval: interval, StopChan: stopChan}
 	monitorMu.Unlock()
-
-	// 🚀 ARKA PLAN NÖBETÇİSİ (Goroutine)
 	go func() {
 		logger.Action("📡 %s için otonom ağ nöbeti başladı. (Aralık: %v)", host, interval)
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 
-		lastStatus := true // Başlangıçta sağlam varsayıyoruz
+		lastStatus := true
 
 		for {
 			select {
 			case <-ticker.C:
-				// TCP Handshake ile kontrol (Ping'den daha kesin sonuç verir)
+
 				conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, "80"), 5*time.Second)
 				currentStatus := (err == nil)
 				if conn != nil { conn.Close() }
 
 				if !currentStatus && lastStatus {
-					// 🚨 DURUM DEĞİŞTİ: BAĞLANTI KOPTU!
-					// logger.Error çağrısı otomatik olarak WhatsApp'a bildirim fırlatır! [cite: 26, 242]
 					logger.Error("❌ [AĞ KESİNTİSİ] %s sunucusuna erişim kaybedildi! Zaman aşımı veya servis kapalı.", host)
 				} else if currentStatus && !lastStatus {
-					// ✅ DURUM DEĞİŞTİ: BAĞLANTI GERİ GELDİ!
 					logger.Success("✅ [AĞ GERİ GELDİ] %s sunucusu tekrar çevrimiçi.", host)
 				}
 				lastStatus = currentStatus

@@ -18,7 +18,6 @@ import (
 	"github.com/shirou/gopsutil/v3/process"
 )
 
-// --- TOOL: SYSTEM TELEMETRY V5 (Self-Healing Infra Agent Grade) ---
 type SysTelemetryTool struct{}
 
 func (t *SysTelemetryTool) Name() string { return "sys_telemetry" }
@@ -45,7 +44,6 @@ func (t *SysTelemetryTool) Parameters() map[string]interface{} {
 	}
 }
 
-// 🎯 YAPI VE THRESHOLD (UYARI) SİSTEMİ
 type HealthResult struct {
 	Status       string  `json:"status"`
 	CPUUsagePct  float64 `json:"cpu_usage_percent"`
@@ -65,20 +63,18 @@ type ProcessInfo struct {
 	Name        string  `json:"name"`
 	CPUUsagePct float64 `json:"cpu_usage_percent"`
 	RAMUsageMB  float64 `json:"ram_usage_mb"`
-	Status      string  `json:"status"` // Normalize edilmiş durum
+	Status      string  `json:"status"` 
 }
 
-// 🧠 THRESHOLD EVALUATOR (Ajan İçin Karar Destek Mekanizması)
 func evaluateAlert(usage float64) string {
 	if usage >= 90.0 {
-		return "CRITICAL 🚨" // Yapay zeka bu emojileri ve tagleri çok hızlı anlar
+		return "CRITICAL 🚨" 
 	} else if usage >= 80.0 {
 		return "WARNING ⚠️"
 	}
 	return "NORMAL ✅"
 }
 
-// 🔄 STATUS NORMALIZER (İşletim Sistemleri Arası Çeviri)
 func normalizeStatus(s string) string {
 	s = strings.ToUpper(s)
 	switch s {
@@ -89,7 +85,6 @@ func normalizeStatus(s string) string {
 	case "T": return "stopped"
 	case "I": return "idle"
 	}
-	// Windows genelde direkt okunaklı metin döner, onu küçük harfe çeviriyoruz.
 	return strings.ToLower(s)
 }
 
@@ -110,24 +105,17 @@ func (t *SysTelemetryTool) Execute(ctx context.Context, args map[string]interfac
 	}
 }
 
-// 🩺 HEALTH ENGINE (Tam Kapsamlı Sistem MR'ı)
 func getSystemHealth(ctx context.Context) (string, error) {
 	logger.Action("📊 Telemetri: Health Engine (Kernel) Okunuyor...")
-
-	// 1. RAM (Context Destekli)
 	v, err := mem.VirtualMemoryWithContext(ctx)
 	if err != nil {
 		return fmt.Sprintf(`{"error": "RAM okunamadı: %v"}`, err), nil
 	}
-
-	// 2. CPU (1 Saniyelik Sliding Window Delta - Doğru Hesaplama)
 	cpuPercents, err := cpu.PercentWithContext(ctx, time.Second, false)
 	cpuUsage := 0.0
 	if err == nil && len(cpuPercents) > 0 {
 		cpuUsage = cpuPercents[0]
 	}
-
-	// 3. DISK (İşletim Sistemine Göre Kök Dizin)
 	diskPath := "/"
 	if runtime.GOOS == "windows" {
 		diskPath = os.Getenv("SystemDrive") + "\\"
@@ -142,7 +130,6 @@ func getSystemHealth(ctx context.Context) (string, error) {
 		usedDisk = d.Used
 	}
 
-	// 4. SONUÇ VE THRESHOLD DEĞERLENDİRMESİ
 	result := HealthResult{
 		Status:       "success",
 		CPUUsagePct:  mathRound(cpuUsage),
@@ -160,7 +147,6 @@ func getSystemHealth(ctx context.Context) (string, error) {
 	return formatTelemetryJSON(result), nil
 }
 
-// 🔍 PROCESS ENGINE (Bağlam Korumalı İşlem Avcısı)
 func findProcess(ctx context.Context, query string) (string, error) {
 	query = strings.ToLower(query)
 	logger.Action("📊 Telemetri: Process Aranıyor -> %s", query)
@@ -177,7 +163,6 @@ func findProcess(ctx context.Context, query string) (string, error) {
 		if err != nil { continue }
 
 		if strings.Contains(strings.ToLower(name), query) {
-			// CPU yüzdesi için kısa delta ölçümü (Agent'i dondurmamak için)
 			cpuPct, _ := p.CPUPercentWithContext(ctx)
 			memInfo, _ := p.MemoryInfoWithContext(ctx)
 			statusList, _ := p.StatusWithContext(ctx)
@@ -206,9 +191,8 @@ func findProcess(ctx context.Context, query string) (string, error) {
 		return fmt.Sprintf(`{"message": "'%s' adında çalışan bir process bulunamadı."}`, query), nil
 	}
 
-	// 🛡️ CONTEXT BLOAT KORUMASI (Max 20 Sonuç, RAM'e Göre Sıralı)
 	sort.Slice(results, func(i, j int) bool {
-		return results[i].RAMUsageMB > results[j].RAMUsageMB // Descending (Büyükten Küçüğe)
+		return results[i].RAMUsageMB > results[j].RAMUsageMB 
 	})
 
 	if len(results) > 20 {
@@ -218,8 +202,6 @@ func findProcess(ctx context.Context, query string) (string, error) {
 	return formatTelemetryJSON(results), nil
 }
 
-// ⚙️ YARDIMCI FONKSİYONLAR
-// 🚀 ZIRH: Gerçek matematiksel yuvarlama (Truncate yerine Round) eklendi
 func mathRound(val float64) float64 {
 	return math.Round(val*100) / 100
 }

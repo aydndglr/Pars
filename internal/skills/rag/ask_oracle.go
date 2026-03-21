@@ -1,4 +1,4 @@
-package rag //coding
+package rag 
 
 import (
 	"context"
@@ -8,9 +8,8 @@ import (
 	"github.com/aydndglr/pars-agent-v3/internal/memory"
 )
 
-// AskOracleTool: Pars'ın resmi dil ve kütüphane dokümanlarını okumasını sağlayan RAG aracı.
 type AskOracleTool struct {
-	DocStore *memory.SQLiteStore // Sadece pars_docs.db'ye bağlanacak
+	DocStore *memory.SQLiteStore 
 }
 
 func (t *AskOracleTool) Name() string { return "ask_oracle" }
@@ -47,7 +46,6 @@ func (t *AskOracleTool) Execute(ctx context.Context, args map[string]interface{}
 		return "", fmt.Errorf("HATA: 'query' (Arama sorgusu) belirtilmedi")
 	}
 
-	// Doküman veritabanında arama yap (Maksimum 5 en iyi sonuç)
 	chunks, err := t.DocStore.SearchCode(ctx, language, query, 5)
 	if err != nil {
 		return "", fmt.Errorf("Kahinden yanıt alınamadı: %v", err)

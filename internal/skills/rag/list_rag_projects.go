@@ -1,4 +1,4 @@
-package rag //filesystem
+package rag
 
 import (
 	"context"
@@ -14,7 +14,6 @@ type ListRAGProjectsTool struct {
 
 func (t *ListRAGProjectsTool) Name() string { return "list_rag_projects" }
 
-// 🚀 İŞTE SİHİRLİ DOKUNUŞ BURADA: LLM'i agresif bir şekilde yönlendiriyoruz!
 func (t *ListRAGProjectsTool) Description() string {
 	return "RAG HAFIZA ANALİZİ: Zihnindeki (FTS5 SQLite) kayıtlı tüm projeleri, indekslenmiş dokümanları ve bunların dosya/parça istatistiklerini listeler. Kullanıcı hafızanda hangi projelerin olduğunu veya indekslenmiş projelerin durumunu sorduğunda bu aracı kullan."
 }
@@ -50,7 +49,7 @@ func (t *ListRAGProjectsTool) Execute(ctx context.Context, args map[string]inter
 		
 		totalFiles += s.FileCount
 		totalChunks += s.ChunkCount
-	}
+	} 
 
 	sb.WriteString(fmt.Sprintf("\n📊 **GENEL SİSTEM ÖZETİ:**\n"))
 	sb.WriteString(fmt.Sprintf("🔹 Toplam Kayıtlı Proje/Doküman Seti: **%d**\n", len(stats)))

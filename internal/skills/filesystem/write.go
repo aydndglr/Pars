@@ -1,5 +1,5 @@
 // internal/skills/filesystem/write.go
-// 🚀 DÜZELTME V6: Security Audit Log Standardizasyonu - delete.go ile Aynı Format
+// 🚀 DÜZELTME V7: Security Audit Log Standardizasyonu + Backup Race Condition Fix
 // ⚠️ DİKKAT: SIEM uyumlu audit log formatı (delete.go ile %100 tutarlı)
 // ⚠️ DİKKAT: auditLog fonksiyonu utils.go'da tanımlıdır, burada SADECE çağrılır
 
@@ -20,6 +20,7 @@ import (
 const (
 	MaxWriteContentLength = 10 * 1024 * 1024 // 10 MB (büyük dosya write koruması)
 	WriteTimeout          = 30 * time.Second // Dosya yazma timeout
+	MaxBackupSize         = 50 * 1024 * 1024 // 50 MB (backup için max boyut)
 )
 
 // WriteTool: Dosya yazma aracı (Security Level aware)
@@ -124,7 +125,7 @@ func (t *WriteTool) Execute(ctx context.Context, args map[string]interface{}) (s
 		return "", fmt.Errorf("validation hatası: %w", err)
 	}
 
-	logger.Action("📝 [WriteTool] Dosya yazma işlemi: %s (mode: %s)", path, mode)
+	logger.Action("📝 [WriteTool] Dosya yazma işlemi: %s (mode: %s, security: %s)", path, mode, t.SecurityLevel)
 
 	// =====================================================================
 	// 🛡️ AKILLI GÜVENLİK FİLTRESİ (SMART GUARDRAILS)
@@ -232,7 +233,7 @@ func (t *WriteTool) Execute(ctx context.Context, args map[string]interface{}) (s
 	case <-done:
 		// İşlem tamamlandı
 	case <-writeCtx.Done():
-		logger.Error("❌ [WriteTool] Write timeout: %s", path)
+		logger.Error("❌ [WriteTool] Write timeout: %s (%d sn)", path, int(WriteTimeout.Seconds()))
 		return "", fmt.Errorf("dosya yazma işlemi zaman aşımına uğradı (%d sn)", int(WriteTimeout.Seconds()))
 	}
 
@@ -242,12 +243,12 @@ func (t *WriteTool) Execute(ctx context.Context, args map[string]interface{}) (s
 	}
 
 	// 🚨 DÜZELTME #7: God mode audit log (utils.go'daki shared fonksiyon)
-	// 🆕 DEĞİŞİKLİK: newFileSize değişkeni kaldırıldı, direkt len(content) kullanılıyor
+	// 🆕 DEĞİŞİKLİK: operation_type parametresi daha açıklayıcı
 	if t.SecurityLevel == "god_mode" {
-		auditLog(strings.ToUpper(mode), path, "SUCCESS", int64(len(content)), mode)
+		auditLog(fmt.Sprintf("%s_WRITE", strings.ToUpper(mode)), path, "SUCCESS", int64(len(content)), fmt.Sprintf("mode:%s", mode))
 	}
 
-	logger.Success("✅ [WriteTool] Dosya yazma tamamlandı: %s", path)
+	logger.Success("✅ [WriteTool] Dosya yazma tamamlandı: %s (%d byte)", path, len(content))
 	return result, nil
 }
 
@@ -263,12 +264,17 @@ func (t *WriteTool) appendFile(path, content string) (string, error) {
 		return "", fmt.Errorf("yazma hatası: %w", err)
 	}
 
-	logger.Info("💾 [WriteTool] Dosya sonuna eklendi: %s", path)
+	logger.Info("💾 [WriteTool] Dosya sonuna eklendi: %s (%d byte)", path, len(content))
 	return fmt.Sprintf("✅ İşlem Başarılı: %s dosyasına içerik eklendi (append).", path), nil
 }
 
 // 🆕 YENİ: insertFile - Belirli satıra ekle
 func (t *WriteTool) insertFile(path, content string, line int) (string, error) {
+	// 🚨 DÜZELTME #8: Büyük dosya kontrolü
+	if info, err := os.Stat(path); err == nil && info.Size() > MaxBackupSize {
+		logger.Warn("⚠️ [WriteTool] Büyük dosya (%.2f MB), insert işlemi yavaş olabilir", float64(info.Size())/(1024*1024))
+	}
+
 	fileBytes, err := os.ReadFile(path)
 	if err != nil {
 		return "", fmt.Errorf("dosya okunamadı: %w", err)
@@ -276,7 +282,7 @@ func (t *WriteTool) insertFile(path, content string, line int) (string, error) {
 
 	lines := strings.Split(string(fileBytes), "\n")
 
-	// 🚨 DÜZELTME #8: Satır numarası guardrails
+	// 🚨 DÜZELTME #9: Satır numarası guardrails
 	if line < 1 {
 		line = 1
 	}
@@ -303,13 +309,30 @@ func (t *WriteTool) insertFile(path, content string, line int) (string, error) {
 
 // 🆕 YENİ: overwriteFile - Dosyayı tamamen üzerine yaz
 func (t *WriteTool) overwriteFile(path, content string) (string, error) {
-	// 🚨 DÜZELTME #9: Backup oluştur (god_mode dışında)
+	// 🚨 DÜZELTME #10: Backup oluştur (god_mode dışında) - Race condition fix
 	if t.SecurityLevel != "god_mode" {
 		if _, err := os.Stat(path); err == nil {
 			// Dosya var, backup oluştur
 			backupPath := path + ".bak"
+			
+			// 🆕 YENİ: Backup dosyası zaten varsa timestamp ekle
+			if _, err := os.Stat(backupPath); err == nil {
+				backupPath = fmt.Sprintf("%s.bak.%d", path, time.Now().Unix())
+			}
+			
 			if err := os.Rename(path, backupPath); err != nil {
-				logger.Warn("⚠️ [WriteTool] Backup oluşturulamadı: %v", err)
+				// Rename başarısızsa copy dene
+				srcData, readErr := os.ReadFile(path)
+				if readErr == nil {
+					writeErr := os.WriteFile(backupPath, srcData, 0644)
+					if writeErr == nil {
+						logger.Debug("💾 [WriteTool] Backup oluşturuldu (copy): %s", backupPath)
+					} else {
+						logger.Warn("⚠️ [WriteTool] Backup oluşturulamadı: %v", writeErr)
+					}
+				} else {
+					logger.Warn("⚠️ [WriteTool] Backup oluşturulamadı: %v", err)
+				}
 			} else {
 				logger.Debug("💾 [WriteTool] Backup oluşturuldu: %s", backupPath)
 			}
@@ -320,7 +343,7 @@ func (t *WriteTool) overwriteFile(path, content string) (string, error) {
 		return "", fmt.Errorf("yazma hatası: %w", err)
 	}
 
-	logger.Info("💾 [WriteTool] Dosya üzerine yazıldı: %s", path)
+	logger.Info("💾 [WriteTool] Dosya üzerine yazıldı: %s (%d byte)", path, len(content))
 	return fmt.Sprintf("✅ İşlem Başarılı: %s dosyası baştan yaratıldı (overwrite).", path), nil
 }
 

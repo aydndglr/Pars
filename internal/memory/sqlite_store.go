@@ -1,7 +1,3 @@
-// internal/memory/sqlite_store.go
-// 🚀 DÜZELTMELER: Nil checks, Error handling, Validation, Logging, Context timeout
-// ⚠️ DİKKAT: db_manager bağlantı havuzunu kullanır, defer db.Close() YOK
-
 package memory
 
 import (
@@ -16,7 +12,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// 🚨 YENİ: Timeout sabitleri
+
 const (
 	DBQueryTimeout   = 30 * time.Second
 	DBWriteTimeout   = 10 * time.Second
@@ -24,8 +20,6 @@ const (
 	MaxContentLength = 1 * 1024 * 1024 // 1 MB
 )
 
-// 🚨 DÜZELTME: Struct tanımlamalarını EN ÜSTE taşı
-// CodeChunk: RAG sisteminden dönecek olan kod parçasının yapısı
 type CodeChunk struct {
 	ProjectName string
 	FilePath    string
@@ -34,14 +28,12 @@ type CodeChunk struct {
 	EndLine     int
 }
 
-// 🚨 DÜZELTME: RAGProjectStat - Fonksiyonlardan ÖNCE tanımlanmalı
 type RAGProjectStat struct {
 	ProjectName string
 	FileCount   int
 	ChunkCount  int
 }
 
-// 🚨 DÜZELTME: ChatMessage - Fonksiyonlardan ÖNCE tanımlanmalı
 type ChatMessage struct {
 	SessionID string
 	Role      string
@@ -49,38 +41,31 @@ type ChatMessage struct {
 	CreatedAt string
 }
 
-// 🚨 DÜZELTME: SessionInfo - Fonksiyonlardan ÖNCE tanımlanmalı
 type SessionInfo struct {
 	SessionID    string
 	MessageCount int
 	LastActive   string
 }
 
-// SQLiteStore: SQLite veritabanı için hafıza ve RAG deposu
 type SQLiteStore struct {
 	db *sql.DB
 }
 
-// NewSQLiteStore: Veritabanını merkezi db_manager üzerinden alır, Hafıza ve RAG (FTS5) tablolarını hazırlar
 func NewSQLiteStore(dbPath string) (*SQLiteStore, error) {
-	// 🚨 DÜZELTME #1: Input validation
 	if dbPath == "" {
 		return nil, fmt.Errorf("dbPath boş olamaz")
 	}
 
-	// 🚀 Merkezi bağlantı havuzundan bağlantı al
 	db, err := db_manager.GetDB(dbPath)
 	if err != nil {
 		logger.Error("❌ [SQLiteStore] DB bağlantısı alınamadı: %v", err)
 		return nil, fmt.Errorf("hafıza veritabanı bağlantısı alınamadı: %v", err)
 	}
 
-	// 🚨 DÜZELTME #2: DB nil kontrolü
 	if db == nil {
 		return nil, fmt.Errorf("db bağlantısı nil")
 	}
 
-	// 1. ORİJİNAL HAFIZA TABLOSU
 	queryMem := `
 	CREATE TABLE IF NOT EXISTS memories (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -92,7 +77,6 @@ func NewSQLiteStore(dbPath string) (*SQLiteStore, error) {
 		return nil, fmt.Errorf("hafıza tablosu oluşturulamadı: %v", err)
 	}
 
-	// 2. MULTI-PROJECT RAG SİSTEMİ (FTS5)
 	queryFTS := `
 	CREATE VIRTUAL TABLE IF NOT EXISTS code_index USING fts5(
 		project_name,
@@ -106,7 +90,6 @@ func NewSQLiteStore(dbPath string) (*SQLiteStore, error) {
 		return nil, fmt.Errorf("RAG (FTS5) tablosu oluşturulamadı: %v", err)
 	}
 
-	// 3. KALICI SOHBET BİLİNCİ (CHAT LOGS)
 	queryChatLogs := `
 	CREATE TABLE IF NOT EXISTS chat_logs (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -124,30 +107,21 @@ func NewSQLiteStore(dbPath string) (*SQLiteStore, error) {
 	return &SQLiteStore{db: db}, nil
 }
 
-// =====================================================================
-// 🧠 1. BÖLÜM: UZUN SÜRELİ HAFIZA (GÖREV GEÇMİŞİ)
-// =====================================================================
-
-// Add: Pars'in görev sonu raporlarını doğrudan kaydeder
 func (s *SQLiteStore) Add(ctx context.Context, content string, metadata map[string]interface{}) error {
-	// 🚨 DÜZELTME #3: Nil check
 	if s == nil || s.db == nil {
 		return fmt.Errorf("sqliteStore nil")
 	}
 
-	// 🚨 DÜZELTME #4: Input validation
 	if strings.TrimSpace(content) == "" {
 		logger.Debug("⚠️ [SQLiteStore] Boş content kaydedilmedi")
 		return nil
 	}
 
-	// 🚨 DÜZELTME #5: Content length check
 	if len(content) > MaxContentLength {
 		content = content[:MaxContentLength]
 		logger.Warn("⚠️ [SQLiteStore] Content kırpıldı (%d karakter)", MaxContentLength)
 	}
 
-	// 🚨 DÜZELTME #6: Timeout'lu context
 	ctx, cancel := context.WithTimeout(ctx, DBWriteTimeout)
 	defer cancel()
 
@@ -162,24 +136,19 @@ func (s *SQLiteStore) Add(ctx context.Context, content string, metadata map[stri
 	return nil
 }
 
-// Search: Pars yeni bir göreve başlarken geçmişi tarar
 func (s *SQLiteStore) Search(ctx context.Context, query string, limit int) ([]string, error) {
-	// 🚨 DÜZELTME #7: Nil check
 	if s == nil || s.db == nil {
 		return nil, fmt.Errorf("sqliteStore nil")
 	}
 
-	// 🚨 DÜZELTME #8: Input validation
 	if strings.TrimSpace(query) == "" {
 		return []string{}, nil
 	}
 
-	// 🚨 DÜZELTME #9: Limit validation
 	if limit <= 0 || limit > MaxSearchLimit {
 		limit = 10 // Varsayılan limit
 	}
 
-	// 🚨 DÜZELTME #10: Timeout'lu context
 	ctx, cancel := context.WithTimeout(ctx, DBQueryTimeout)
 	defer cancel()
 
@@ -200,7 +169,6 @@ func (s *SQLiteStore) Search(ctx context.Context, query string, limit int) ([]st
 	rows, err := s.db.QueryContext(ctx, sqlQuery, args...)
 	if err != nil {
 		logger.Debug("⚠️ [SQLiteStore] Search hatası, fallback deneniyor: %v", err)
-		// Fallback: Basit sorgu
 		rows, err = s.db.QueryContext(ctx, `SELECT content FROM memories ORDER BY created_at DESC LIMIT ?`, limit)
 		if err != nil {
 			logger.Error("❌ [SQLiteStore] Fallback search hatası: %v", err)
@@ -217,7 +185,6 @@ func (s *SQLiteStore) Search(ctx context.Context, query string, limit int) ([]st
 		}
 	}
 
-	// 🚨 DÜZELTME #11: Rows error check
 	if err := rows.Err(); err != nil {
 		logger.Error("❌ [SQLiteStore] Rows iteration hatası: %v", err)
 		return nil, err
@@ -227,18 +194,12 @@ func (s *SQLiteStore) Search(ctx context.Context, query string, limit int) ([]st
 	return results, nil
 }
 
-// =====================================================================
-// 🚀 2. BÖLÜM: RAG (CODEBASE INDEXING) MOTORU
-// =====================================================================
-
-// ClearProjectIndex: Belirli bir projenin RAG verilerini siler
 func (s *SQLiteStore) ClearProjectIndex(ctx context.Context, projectName string) error {
-	// 🚨 DÜZELTME #12: Nil check
 	if s == nil || s.db == nil {
 		return fmt.Errorf("sqliteStore nil")
 	}
 
-	// 🚨 DÜZELTME #13: Timeout'lu context
+
 	ctx, cancel := context.WithTimeout(ctx, DBWriteTimeout)
 	defer cancel()
 
@@ -259,14 +220,11 @@ func (s *SQLiteStore) ClearProjectIndex(ctx context.Context, projectName string)
 	return nil
 }
 
-// AddCodeChunk: Kod parçasını proje adıyla FTS5 tablosuna gömer
 func (s *SQLiteStore) AddCodeChunk(ctx context.Context, projectName, filePath, content string, startLine, endLine int) error {
-	// 🚨 DÜZELTME #14: Nil check
 	if s == nil || s.db == nil {
 		return fmt.Errorf("sqliteStore nil")
 	}
 
-	// 🚨 DÜZELTME #15: Input validation
 	if strings.TrimSpace(projectName) == "" {
 		return fmt.Errorf("projectName boş olamaz")
 	}
@@ -280,14 +238,12 @@ func (s *SQLiteStore) AddCodeChunk(ctx context.Context, projectName, filePath, c
 		return nil
 	}
 
-	// 🚨 DÜZELTME #16: Line number validation
 	if startLine < 1 || endLine < startLine {
 		logger.Warn("⚠️ [SQLiteStore] Geçersiz satır numaraları: %d-%d", startLine, endLine)
 		startLine = 1
 		endLine = 1
 	}
 
-	// 🚨 DÜZELTME #17: Timeout'lu context
 	ctx, cancel := context.WithTimeout(ctx, DBWriteTimeout)
 	defer cancel()
 
@@ -302,24 +258,19 @@ func (s *SQLiteStore) AddCodeChunk(ctx context.Context, projectName, filePath, c
 	return nil
 }
 
-// SearchCode: FTS5 MATCH operatörü ile projede ışık hızında filtreli kod bulur
 func (s *SQLiteStore) SearchCode(ctx context.Context, projectName, query string, limit int) ([]CodeChunk, error) {
-	// 🚨 DÜZELTME #18: Nil check
 	if s == nil || s.db == nil {
 		return nil, fmt.Errorf("sqliteStore nil")
 	}
 
-	// 🚨 DÜZELTME #19: Input validation
 	if strings.TrimSpace(query) == "" {
 		return []CodeChunk{}, nil
 	}
 
-	// 🚨 DÜZELTME #20: Limit validation
 	if limit <= 0 || limit > MaxSearchLimit {
 		limit = 10
 	}
 
-	// 🚨 DÜZELTME #21: Timeout'lu context
 	ctx, cancel := context.WithTimeout(ctx, DBQueryTimeout)
 	defer cancel()
 
@@ -380,7 +331,6 @@ func (s *SQLiteStore) SearchCode(ctx context.Context, projectName, query string,
 	return results, nil
 }
 
-// searchCodeFallback: MATCH operatörü patlarsa LIKE ile proje bazlı arama yapar
 func (s *SQLiteStore) searchCodeFallback(ctx context.Context, projectName string, terms []string, limit int) ([]CodeChunk, error) {
 	sqlQuery := `SELECT project_name, file_path, content, start_line, end_line FROM code_index WHERE 1=1`
 	var args []interface{}
@@ -418,18 +368,11 @@ func (s *SQLiteStore) searchCodeFallback(ctx context.Context, projectName string
 	return results, nil
 }
 
-// =====================================================================
-// 📊 3. BÖLÜM: RAG ZİHİN ANALİZİ (İSTATİSTİKLER)
-// =====================================================================
-
-// GetRAGProjectsStats: FTS5 tablosundaki projeleri gruplayarak dosya ve parça sayılarını hesaplar
 func (s *SQLiteStore) GetRAGProjectsStats(ctx context.Context) ([]RAGProjectStat, error) {
-	// 🚨 DÜZELTME #22: Nil check
 	if s == nil || s.db == nil {
 		return nil, fmt.Errorf("sqliteStore nil")
 	}
 
-	// 🚨 DÜZELTME #23: Timeout'lu context
 	ctx, cancel := context.WithTimeout(ctx, DBQueryTimeout)
 	defer cancel()
 
@@ -463,18 +406,11 @@ func (s *SQLiteStore) GetRAGProjectsStats(ctx context.Context) ([]RAGProjectStat
 	return stats, nil
 }
 
-// =====================================================================
-// 💬 4. BÖLÜM: KALICI SOHBET BİLİNCİ (CHAT LOGS)
-// =====================================================================
-
-// AddChatMessage: Sohbet mesajlarını veritabanına anlık olarak işler
 func (s *SQLiteStore) AddChatMessage(ctx context.Context, sessionID, role, content string) error {
-	// 🚨 DÜZELTME #24: Nil check
 	if s == nil || s.db == nil {
 		return fmt.Errorf("sqliteStore nil")
 	}
 
-	// 🚨 DÜZELTME #25: Input validation
 	if strings.TrimSpace(sessionID) == "" {
 		return fmt.Errorf("sessionID boş olamaz")
 	}
@@ -488,13 +424,11 @@ func (s *SQLiteStore) AddChatMessage(ctx context.Context, sessionID, role, conte
 		return nil
 	}
 
-	// 🚨 DÜZELTME #26: Content length check
 	if len(content) > MaxContentLength {
 		content = content[:MaxContentLength]
 		logger.Warn("⚠️ [SQLiteStore] Chat message kırpıldı (%d karakter)", MaxContentLength)
 	}
 
-	// 🚨 DÜZELTME #27: Timeout'lu context
 	ctx, cancel := context.WithTimeout(ctx, DBWriteTimeout)
 	defer cancel()
 
@@ -508,19 +442,15 @@ func (s *SQLiteStore) AddChatMessage(ctx context.Context, sessionID, role, conte
 	return nil
 }
 
-// GetSessionChat: Belirli bir oturumun geçmişini getirir
 func (s *SQLiteStore) GetSessionChat(ctx context.Context, sessionID string) ([]ChatMessage, error) {
-	// 🚨 DÜZELTME #28: Nil check
 	if s == nil || s.db == nil {
 		return nil, fmt.Errorf("sqliteStore nil")
 	}
 
-	// 🚨 DÜZELTME #29: Input validation
 	if strings.TrimSpace(sessionID) == "" {
 		return []ChatMessage{}, nil
 	}
 
-	// 🚨 DÜZELTME #30: Timeout'lu context
 	ctx, cancel := context.WithTimeout(ctx, DBQueryTimeout)
 	defer cancel()
 
@@ -549,19 +479,15 @@ func (s *SQLiteStore) GetSessionChat(ctx context.Context, sessionID string) ([]C
 	return msgs, nil
 }
 
-// GetRecentSessions: Geçmiş sohbetleri listeler
 func (s *SQLiteStore) GetRecentSessions(ctx context.Context, limit int) ([]SessionInfo, error) {
-	// 🚨 DÜZELTME #31: Nil check
 	if s == nil || s.db == nil {
 		return nil, fmt.Errorf("sqliteStore nil")
 	}
 
-	// 🚨 DÜZELTME #32: Limit validation
 	if limit <= 0 || limit > MaxSearchLimit {
 		limit = 20
 	}
 
-	// 🚨 DÜZELTME #33: Timeout'lu context
 	ctx, cancel := context.WithTimeout(ctx, DBQueryTimeout)
 	defer cancel()
 
@@ -596,19 +522,14 @@ func (s *SQLiteStore) GetRecentSessions(ctx context.Context, limit int) ([]Sessi
 	return sessions, nil
 }
 
-// GetSessionsByDate: Belirli bir gündeki sohbetleri listeler
 func (s *SQLiteStore) GetSessionsByDate(ctx context.Context, dateStr string) ([]SessionInfo, error) {
-	// 🚨 DÜZELTME #34: Nil check
 	if s == nil || s.db == nil {
 		return nil, fmt.Errorf("sqliteStore nil")
 	}
-
-	// 🚨 DÜZELTME #35: Input validation
 	if strings.TrimSpace(dateStr) == "" {
 		return []SessionInfo{}, nil
 	}
 
-	// 🚨 DÜZELTME #36: Timeout'lu context
 	ctx, cancel := context.WithTimeout(ctx, DBQueryTimeout)
 	defer cancel()
 

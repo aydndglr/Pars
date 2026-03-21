@@ -12,15 +12,13 @@ var (
 	procAllocConsole  = kernel32.NewProc("AllocConsole")
 )
 
-// hideConsole: Sadece Windows'ta terminal penceresini arka planda gizler
 func hideConsole() {
 	hwnd, _, _ := procGetConsoleWin.Call()
 	if hwnd != 0 {
-		procShowWindow.Call(hwnd, 0) // 0 = SW_HIDE
+		procShowWindow.Call(hwnd, 0) 
 	}
 }
 
-// initConsole: Sadece Windows'ta çalışır
 func initConsole() {
 	procAllocConsole.Call()
 }

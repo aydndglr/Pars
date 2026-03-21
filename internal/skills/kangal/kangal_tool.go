@@ -1,8 +1,3 @@
-// internal/skills/kangal/kangal_tool.go
-// 🚀 KANGAL - KULLANICI KONTROL ARACI
-// 📅 Oluşturulma: 2026-03-07 (Pars V5 - Kangal Edition)
-// ⚠️ DİKKAT: Kullanıcı bu araçla Kangal'ı aç/kapa, sorgula, ayarla
-
 package kangal
 
 import (
@@ -14,20 +9,12 @@ import (
 	"github.com/aydndglr/pars-agent-v3/internal/core/logger"
 )
 
-// ========================================================================
-// 📦 KANGAL CONTROL TOOL YAPISI
-// ========================================================================
-// KangalControlTool: Kullanıcının Kangal sistemini kontrol etmesini sağlayan native tool
 type KangalControlTool struct {
 	kangal *Kangal // Kangal instance'a referans
 }
 
-// ========================================================================
-// 🆕 YENİ: KangalControlTool Oluşturucu
-// ========================================================================
-// NewKangalControlTool: Yeni Kangal kontrol aracı oluşturur
+
 func NewKangalControlTool(k *Kangal) *KangalControlTool {
-	// 🚨 DÜZELTME #1: Nil check
 	if k == nil {
 		logger.Error("❌ [KangalControlTool] Kangal instance nil! Araç oluşturulamadı.")
 		return nil
@@ -38,15 +25,10 @@ func NewKangalControlTool(k *Kangal) *KangalControlTool {
 	}
 }
 
-// ========================================================================
-// 🔧 TOOL INTERFACE IMPLEMENTATION
-// ========================================================================
-// Name: Aracın benzersiz adı
 func (t *KangalControlTool) Name() string {
 	return "kangal_control"
 }
 
-// Description: Aracın ne işe yaradığını açıklar (LLM için)
 func (t *KangalControlTool) Description() string {
 	return `KANGAL BEKÇİ SİSTEMİ KONTROL ARACI. Kullanıcının Kangal'ı yönetmesini sağlar.
 Aksiyonlar (action):
@@ -61,7 +43,6 @@ Aksiyonlar (action):
 Kullanıcı "Kangal'ı aç/kapat", "bekçi sistemini aktif et", "alert'leri göster" dediğinde bu aracı kullan.`
 }
 
-// Parameters: LLM'in aracı çağırırken kullanacağı JSON schema
 func (t *KangalControlTool) Parameters() map[string]interface{} {
 	return map[string]interface{}{
 		"type": "object",
@@ -78,7 +59,7 @@ func (t *KangalControlTool) Parameters() map[string]interface{} {
 			},
 			"limit": map[string]interface{}{
 				"type":        "integer",
-				"description": "Sadece 'alerts' action için: Kaç alert gösterilecek (varsayılan: 10)",
+				"description": "Sadece 'alerts' action için: Kaç alert gösterilecek (varsayılan: 10, max: 50)",
 				"default":     10,
 			},
 			"enable_quiet": map[string]interface{}{
@@ -90,20 +71,13 @@ func (t *KangalControlTool) Parameters() map[string]interface{} {
 	}
 }
 
-// ========================================================================
-// ⚡ EXECUTE - ANA İŞLEM MOTORU
-// ========================================================================
-// Execute: Kangal kontrol işlemlerini yürütür
 func (t *KangalControlTool) Execute(ctx context.Context, args map[string]interface{}) (string, error) {
-	// 🚨 DÜZELTME #2: Nil checks
 	if t == nil {
 		return "", fmt.Errorf("KangalControlTool nil")
 	}
 	if t.kangal == nil {
 		return "", fmt.Errorf("Kangal instance nil")
 	}
-
-	// 🚨 DÜZELTME #3: Action parametresini al
 	actionRaw, ok := args["action"]
 	if !ok || actionRaw == nil {
 		return "", fmt.Errorf("'action' parametresi eksik")
@@ -116,7 +90,6 @@ func (t *KangalControlTool) Execute(ctx context.Context, args map[string]interfa
 
 	logger.Info("🐕 [KangalControl] Action: %s", action)
 
-	// Action'a göre işlem yap
 	switch action {
 	case "status":
 		return t.getStatus()
@@ -133,6 +106,9 @@ func (t *KangalControlTool) Execute(ctx context.Context, args map[string]interfa
 		if limit <= 0 {
 			limit = 10
 		}
+		if limit > 50 {
+			limit = 50
+		}
 		return t.getAlerts(limit)
 	case "test":
 		return t.testNotification()
@@ -144,31 +120,23 @@ func (t *KangalControlTool) Execute(ctx context.Context, args map[string]interfa
 	}
 }
 
-// ========================================================================
-// 🎯 ACTION IMPLEMENTATIONLARI
-// ========================================================================
-
-// getStatus: Kangal durum raporunu döndür
 func (t *KangalControlTool) getStatus() (string, error) {
 	if !t.kangal.IsRunning() {
 		return "🐕 **KANGAL DURUMU:** Devre Dışı\n\nKangal bekçi sistemi şu anda aktif değil. Aktif etmek için 'enable' action'ını kullan.", nil
 	}
 
-	// Alt modül statuslarını topla
 	status := t.kangal.GetStatus()
 
 	var sb strings.Builder
 	sb.WriteString("🐕 **KANGAL BEKÇİ SİSTEMİ DURUM RAPORU** 🐕\n")
 	sb.WriteString(strings.Repeat("=", 50) + "\n\n")
 
-	// Genel durum
 	sb.WriteString(fmt.Sprintf("🟢 **Durum:** Aktif\n"))
 	sb.WriteString(fmt.Sprintf("⚙️ **Hassasiyet:** %s\n", t.kangal.Config.SensitivityLevel))
 	sb.WriteString(fmt.Sprintf("🧠 **Watchdog Model:** %s\n", t.kangal.Config.WatchdogModel))
 	sb.WriteString(fmt.Sprintf("📊 **İzlenen Uygulama:** %d adet\n", len(t.kangal.Config.TrackedApps)))
 	sb.WriteString("\n")
 
-	// Alt modül detayları
 	if windowTracker, ok := status["window_tracker"].(map[string]interface{}); ok {
 		sb.WriteString(fmt.Sprintf("🪟 **Window Tracker:** %v\n", windowTracker["is_running"]))
 	}
@@ -195,9 +163,7 @@ func (t *KangalControlTool) getStatus() (string, error) {
 	return sb.String(), nil
 }
 
-// enable: Kangal'ı aktif eder
 func (t *KangalControlTool) enable() (string, error) {
-	// 🚨 DÜZELTME #4: Config kontrolü (watchdog_model boş mu?)
 	if !t.kangal.Config.IsWatchdogEnabled() {
 		return "❌ **KANGAL AKTİF EDİLEMEDİ**\n\n" +
 			"⚠️ **Sebep:** `watchdog_model` config'de tanımlı değil!\n\n" +
@@ -220,7 +186,6 @@ func (t *KangalControlTool) enable() (string, error) {
 		"💡 **İpucu:** Hata veya öneri alert'leri terminal ve/veya WhatsApp üzerinden iletilecek.", nil
 }
 
-// disable: Kangal'ı devre dışı bırakır
 func (t *KangalControlTool) disable() (string, error) {
 	if !t.kangal.IsRunning() {
 		return "ℹ️ **Kangal zaten devre dışı!**\n\nBekçi sistemi zaten çalışmıyor.", nil
@@ -234,9 +199,7 @@ func (t *KangalControlTool) disable() (string, error) {
 		"💡 **İpucu:** Kısa süreli sessizlik için 'quiet_hours' action'ını kullanabilirsin.", nil
 }
 
-// setSensitivity: Hassasiyet seviyesini değiştir
 func (t *KangalControlTool) setSensitivity(level string) (string, error) {
-	// 🚨 DÜZELTME #5: Level validation
 	validLevels := map[string]bool{
 		"low":      true,
 		"balanced": true,
@@ -270,9 +233,7 @@ func (t *KangalControlTool) setSensitivity(level string) (string, error) {
 		"💡 **İpucu:** Çok fazla alert alıyorsan 'low', daha proaktif olsun istiyorsan 'high' kullan.", nil
 }
 
-// getAlerts: Son Kangal alert'lerini listeler
 func (t *KangalControlTool) getAlerts(limit int) (string, error) {
-	// 🚨 DÜZELTME #6: Notification engine'den alert history al
 	notification := t.kangal.GetNotification()
 	if notification == nil {
 		return "⚠️ **Alert Geçmişi Bulunamadı**\n\n" +
@@ -310,7 +271,6 @@ func (t *KangalControlTool) getAlerts(limit int) (string, error) {
 	return sb.String(), nil
 }
 
-// testNotification: Test bildirimi gönderir
 func (t *KangalControlTool) testNotification() (string, error) {
 	notification := t.kangal.GetNotification()
 	if notification == nil {
@@ -318,7 +278,6 @@ func (t *KangalControlTool) testNotification() (string, error) {
 			"Notification engine aktif değil. Kangal'ın çalıştığından emin ol.", nil
 	}
 
-	// Test bildirimi gönder
 	notification.TestNotification()
 
 	return "✅ **TEST BAŞARILI!** 🐕\n\n" +
@@ -327,7 +286,6 @@ func (t *KangalControlTool) testNotification() (string, error) {
 		"💡 **İpucu:** Bildirim almadıysan config'de notification ayarlarını kontrol et.", nil
 }
 
-// toggleQuietHours: Rahatsız etme modunu aç/kapa
 func (t *KangalControlTool) toggleQuietHours(enableQuiet bool) (string, error) {
 	notification := t.kangal.GetNotification()
 	if notification == nil {
@@ -335,7 +293,6 @@ func (t *KangalControlTool) toggleQuietHours(enableQuiet bool) (string, error) {
 			"Notification engine aktif değil.", nil
 	}
 
-	// 🚨 DÜZELTME #7: Config'den quiet_hours ayarını oku
 	currentQuiet := t.kangal.Config.QuietHours.Enabled
 
 	if enableQuiet == currentQuiet {
@@ -349,8 +306,8 @@ func (t *KangalControlTool) toggleQuietHours(enableQuiet bool) (string, error) {
 			"💡 **İpucu:** Aktif etmek için enable_quiet=true gönder.", nil
 	}
 
-	// Config'i güncelle
 	t.kangal.Config.QuietHours.Enabled = enableQuiet
+	warningNote := "\n⚠️ **Not:** Bu ayar geçicidir (Runtime). Sistemi yeniden başlattığında kalıcı olması için config.yaml dosyasını güncellemelisin.\n"
 
 	if enableQuiet {
 		return "🌙 **QUIET HOURS AKTİF EDİLDİ** 🐕\n\n" +
@@ -359,25 +316,21 @@ func (t *KangalControlTool) toggleQuietHours(enableQuiet bool) (string, error) {
 			fmt.Sprintf("⏰ Sessiz Saatler: %s - %s\n\n",
 				t.kangal.Config.QuietHours.Start,
 				t.kangal.Config.QuietHours.End) +
+			warningNote +
 			"💡 **İpucu:** Normal moda dönmek için enable_quiet=false gönder.", nil
 	}
 
 	return "☀️ **QUIET HOURS DEVRE DIŞI** 🐕\n\n" +
 		"😃 Rahatsız etme modu kapalı.\n" +
 		"📝 Tüm alert'ler (kritik + uyarı + info) gönderilecek.\n\n" +
+		warningNote +
 		"💡 **İpucu:** Gece modu için enable_quiet=true gönder.", nil
 }
 
-// ========================================================================
-// 🆕 YENİ: HELPER FONKSİYONLAR
-// ========================================================================
-
-// GetKangal: Kangal instance'ı döndür (debug için)
 func (t *KangalControlTool) GetKangal() *Kangal {
 	return t.kangal
 }
 
-// IsEnabled: Kangal aktif mi kontrol et
 func (t *KangalControlTool) IsEnabled() bool {
 	if t.kangal == nil {
 		return false
@@ -385,7 +338,6 @@ func (t *KangalControlTool) IsEnabled() bool {
 	return t.kangal.IsRunning()
 }
 
-// GetConfig: Kangal config'ini döndür
 func (t *KangalControlTool) GetConfig() map[string]interface{} {
 	if t.kangal == nil || t.kangal.Config == nil {
 		return map[string]interface{}{
@@ -405,11 +357,6 @@ func (t *KangalControlTool) GetConfig() map[string]interface{} {
 	}
 }
 
-// ========================================================================
-// 📊 TOOL STATUS (DEBUG İÇİN)
-// ========================================================================
-
-// GetStatus: Tool durumunu döndür
 func (t *KangalControlTool) GetStatus() map[string]interface{} {
 	if t == nil {
 		return map[string]interface{}{

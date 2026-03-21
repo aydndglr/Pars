@@ -1,6 +1,7 @@
 // internal/skills/filesystem/delete.go
-// 🚀 DÜZELTME: auditLog fonksiyonu utils.go'ya taşındı (BU DOSYADAN SİLİNDİ)
-// ⚠️ DİKKAT: Satır 107-113 arası auditLog fonksiyonunu SİL!
+// 🚀 DÜZELTME V2: auditLog Fonksiyonu utils.go'ya Taşındı (Temizlendi)
+// ⚠️ DİKKAT: SIEM uyumlu audit log formatı (write.go ile %100 tutarlı)
+// ⚠️ DİKKAT: auditLog fonksiyonu utils.go'da tanımlıdır, burada SADECE çağrılır
 
 package filesystem
 
@@ -102,18 +103,6 @@ func isCriticalSystemPath(path string) bool {
 
 	return false
 }
-
-// ⚠️ DİKKAT: Aşağıdaki auditLog fonksiyonunu SİL (satır 107-113)
-// func auditLog(operation, path, result string, fileSize int64, isDir bool) {
-// 	timestamp := time.Now().Format(time.RFC3339)
-// 	objType := "file"
-// 	if isDir {
-// 		objType = "directory"
-// 	}
-// 	logger.Warn("⚡ [GOD MODE AUDIT] [%s] [%s] [%s] [%s] [RESULT:%s] [SIZE:%d] [TYPE:%s]",
-// 		timestamp, "FS_DELETE", operation, path, result, fileSize, objType)
-// }
-// ⚠️ YUKARIDAKİ FONKSİYONU SİL! utils.go'daki kullanılacak.
 
 func (t *DeleteTool) Execute(ctx context.Context, args map[string]interface{}) (string, error) {
 	// 🚨 DÜZELTME #1: Nil checks

@@ -13,7 +13,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// SkillMetadata: MD dosyasının tepesindeki YAML (Frontmatter) bloğu
 type SkillMetadata struct {
 	Name         string                 `yaml:"name"`
 	Version      string                 `yaml:"version"`
@@ -22,17 +21,15 @@ type SkillMetadata struct {
 	Interval     string                 `yaml:"interval"`
 	Parameters   map[string]interface{} `yaml:"parameters"`
 	Async        bool                   `yaml:"async"`
-	Packages     string                 `yaml:"packages"` // 🚀 YENİ: uv (Hayalet Venv) için gerekli kütüphaneler (Örn: "pandas requests")
+	Packages     string                 `yaml:"packages"`
 	Instructions string                 `yaml:"instructions"`
 }
 
-// LoadAllUserSkills: MD dosyalarını okur, tools/ klasörüne Python yazar ve SQLite DB'ye kaydeder.
-// ⚡ Mutlak uvPath eklendi.
+
 func LoadAllUserSkills(dir string, mgr *agentSkills.Manager, pythonPath string, uvPath string) error {
-	toolsDir := "tools" // Workspace/Araç klasörü
+	toolsDir := "tools" 
 	importedDir := filepath.Join(dir, "imported")
 
-	// Gerekli klasörleri oluştur
 	os.MkdirAll(toolsDir, 0755)
 	os.MkdirAll(importedDir, 0755)
 
@@ -53,7 +50,6 @@ func LoadAllUserSkills(dir string, mgr *agentSkills.Manager, pythonPath string, 
 			continue
 		}
 
-		// 1. Python dosyasını doğrudan ana tools/ klasörüne yaz
 		scriptFileName := fmt.Sprintf("%s.py", meta.Name)
 		scriptPath := filepath.Join(toolsDir, scriptFileName)
 		if err := os.WriteFile(scriptPath, []byte(code), 0644); err != nil {
@@ -61,18 +57,15 @@ func LoadAllUserSkills(dir string, mgr *agentSkills.Manager, pythonPath string, 
 			continue
 		}
 
-		// 2. 🚀 SQLITE VERİTABANINA KAYIT
-		// Parametre olarak "user" etiketini veriyoruz.
-		// uv paket listesini (meta.Packages), dev_studio'da yaptığımız gibi instructions alanına gömüyoruz.
 		err = coding.RegisterToolToDB(
-			toolsDir,          // Workspace klasörü
-			meta.Name,         // Araç Adı
-			"user",            // 🎯 KAYNAK TÜRÜ: Kullanıcı (MD)
-			meta.Description,  // Açıklama
-			scriptPath,        // Python dosyasının yolu
-			meta.Parameters,   // JSON Argüman Şeması
-			meta.Async,        // Arka plan görevi mi?
-			meta.Packages,     // 🚀 YENİ: uv paketlerini DB'ye işliyoruz
+			toolsDir,          
+			meta.Name,        
+			"user",           
+			meta.Description,  
+			scriptPath,       
+			meta.Parameters,   
+			meta.Async,        
+			meta.Packages,   
 		)
 
 		if err != nil {
@@ -80,21 +73,18 @@ func LoadAllUserSkills(dir string, mgr *agentSkills.Manager, pythonPath string, 
 			continue
 		}
 
-		// 3. MD dosyasını imported/ klasörüne taşı (Sürekli okumayı engellemek için)
 		newFilePath := filepath.Join(importedDir, filepath.Base(file))
 		os.Rename(file, newFilePath)
 
-		// 4. Sistemi yeniden başlatmadan hemen kullanabilmesi için canlı hafızaya (Manager) ekle
-		// ⚡ NewPythonTool artık mutlak uvPath'i de alıyor.
 		tool := agentSkills.NewPythonTool(
 			meta.Name,
 			meta.Description,
 			scriptPath,
 			pythonPath,
-			uvPath,          // ⚡ YENİ: Mutlak UV yolu eklendi
+			uvPath,          
 			meta.Parameters,
 			meta.Async,
-			meta.Packages,   // 🚀 YENİ: Çalışma anında uv run --with <Packages> yapabilmesi için
+			meta.Packages,  
 		)
 		mgr.Register(tool)
 
@@ -103,7 +93,7 @@ func LoadAllUserSkills(dir string, mgr *agentSkills.Manager, pythonPath string, 
 	return nil
 }
 
-// parseMD: Regex ile zırhlandırılmış MD ayrıştırıcı
+
 func parseMD(path string) (*SkillMetadata, string, error) {
 	contentBytes, err := os.ReadFile(path)
 	if err != nil {

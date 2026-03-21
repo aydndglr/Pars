@@ -1,8 +1,3 @@
-// internal/agent/execution.go
-// 🚀 DÜZELTME V7: Task Management Entegrasyonu - Task Lifecycle Yönetimi
-// ⚠️ DİKKAT: Görev başlangıcı/bitişi heartbeat ile senkronize edildi
-// 📅 Oluşturulma: 2026-03-09 (Pars V5 Critical Fix #6)
-
 package agent
 
 import (
@@ -11,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -24,250 +20,332 @@ import (
 const (
 	MaxHistoryMessages = 40
 	MaxParallelTools   = 4
-	DefaultMaxSteps    = 20
+	DefaultMaxSteps    = 25
+	ToolExecTimeout    = 3 * time.Minute
+	MemoryWriteTimeout = 5 * time.Second
 )
 
-// 🆕 YENİ: getTaskTypeFromSessionID - Session ID'den görev tipini belirle
 func getTaskTypeFromSessionID(sessionID string) heartbeat.TaskType {
-	if strings.HasPrefix(sessionID, "[WA-ALERT-") || 
-	   strings.HasPrefix(sessionID, "TSK-") ||
-	   strings.HasPrefix(sessionID, "CLI-") {
-		return heartbeat.TaskTypeUser // Kullanıcı başlattı
+	userPrefixes := []string{"[WA-ALERT-", "TSK-", "CLI-", "CMD-", "IPC-"}
+	for _, prefix := range userPrefixes {
+		if strings.HasPrefix(sessionID, prefix) {
+			return heartbeat.TaskTypeUser
+		}
 	}
-	return heartbeat.TaskTypeAgent // Agent kendi oluşturdu
+	return heartbeat.TaskTypeAgent
+}
+
+func isChatModePlan(plan string) bool {
+	if plan == "" {
+		return false
+	}
+	planLower := strings.ToLower(strings.TrimSpace(plan))
+	if strings.Contains(planLower, "no_plan_needed") {
+		return true
+	}
+	chatIndicators := []string{"chat mode", "sohbet modu"}
+	for _, indicator := range chatIndicators {
+		if strings.Contains(planLower, indicator) {
+			return true
+		}
+	}
+	return false
+}
+
+func writeChatMessageAsync(mem kernel.Memory, sessionID, role, content string) {
+	if mem == nil || content == "" {
+		return
+	}
+	sqlStore, ok := mem.(*memory.SQLiteStore)
+	if !ok {
+		return
+	}
+	go func() {
+		memCtx, memCancel := context.WithTimeout(context.Background(), MemoryWriteTimeout)
+		defer memCancel()
+		_ = sqlStore.AddChatMessage(memCtx, sessionID, role, content)
+	}()
+}
+
+func extractToolCallsFromText(text string) []kernel.ToolCall {
+	var calls []kernel.ToolCall
+	re := regexp.MustCompile(`(?i)(?:(?:json)?Native\s*)?Tool\s*Call:?\s*([a-zA-Z0-9_]+)\s*\((.*?)\)\]?`)
+	matches := re.FindAllStringSubmatch(text, -1)
+
+	for _, m := range matches {
+		if len(m) >= 3 {
+			funcName := strings.TrimSpace(m[1])
+			argsStr := strings.TrimSpace(m[2])
+
+			for strings.HasSuffix(argsStr, "]") || strings.HasSuffix(argsStr, ")") {
+				argsStr = argsStr[:len(argsStr)-1]
+				argsStr = strings.TrimSpace(argsStr)
+			}
+
+			if strings.HasPrefix(argsStr, "{") && strings.HasSuffix(argsStr, "}") {
+				var argsMap map[string]interface{}
+				if err := json.Unmarshal([]byte(argsStr), &argsMap); err == nil {
+					calls = append(calls, kernel.ToolCall{
+						ID:        fmt.Sprintf("call_fb_%X", time.Now().UnixNano()%0xFFFF),
+						Function:  funcName,
+						Arguments: argsMap,
+					})
+				}
+			}
+		}
+	}
+	return calls
 }
 
 func (a *Pars) Run(ctx context.Context, input string, images []string) (string, error) {
+	logger.Info("🚀 [Execution] Run fonksiyonu başlatıldı, input uzunluğu: %d karakter", len(input))
 
-	// 🛡️ Context Yönetimi
+	if a == nil {
+		return "", fmt.Errorf("pars instance nil")
+	}
+
 	baseCtx, cancel := context.WithCancel(ctx)
-
 	clientTaskID, _ := ctx.Value("client_task_id").(string)
 
-	// 🛡️ Oturum Oluşturma ve Kilit Yönetimi (Atomik İşlem)
 	a.sessMu.Lock()
-	sess, exists := a.Sessions[clientTaskID]
-
+	sess, exists := a.sessions[clientTaskID]
 	if !exists {
 		sess = &Session{
 			ID:        clientTaskID,
-			History:   []kernel.Message{},
+			History:   make([]kernel.Message, 0, MaxHistoryMessages),
 			CreatedAt: time.Now(),
 			Cancel:    cancel,
 		}
-
-		if clientTaskID == "" {
+		if sess.ID == "" {
 			sess.ID = fmt.Sprintf("TSK-%X", time.Now().UnixNano()%0xFFFFF)
 		}
-
-		a.Sessions[sess.ID] = sess
-		logger.Info("✅ [SESSION] Yeni oturum: %s", sess.ID)
+		a.sessions[sess.ID] = sess
 	} else {
-		// 🚨 DÜZELTME #1: Mevcut oturum varsa eski iptal sinyalini temizle (Double-call önle)
+		sess.mu.Lock()
 		if sess.Cancel != nil {
 			sess.Cancel()
 		}
 		sess.Cancel = cancel
+		sess.mu.Unlock()
 	}
 	a.sessMu.Unlock()
 
 	isEphemeral := strings.HasPrefix(sess.ID, "[WA-ALERT-")
 
-	// 🛡️ RAM Temizliği ve Çıkış Kalkanı
 	defer func() {
 		cancel()
 		if isEphemeral {
 			a.sessMu.Lock()
-			delete(a.Sessions, sess.ID)
+			delete(a.sessions, sess.ID)
 			a.sessMu.Unlock()
-			logger.Debug("🧹 RAM Temizliği: Tek seferlik görev [%s] silindi.", sess.ID)
 		}
 	}()
 
 	sessCtx := context.WithValue(baseCtx, "session_id", sess.ID)
-	logger.Debug("👤 User [%s]: %s", sess.ID, input)
 
-	// 🛡️ Kullanıcı Mesajını Ekleme (Atomik)
 	sess.mu.Lock()
 	sess.History = append(sess.History, kernel.Message{
-		Role:    "user",
+		Role:    kernel.RoleUser,
 		Content: input,
 		Images:  images,
 	})
 	a.trimHistory(sess)
 	sess.mu.Unlock()
 
-	// 🛡️ Veritabanı Yazma (Zaman Aşımı Korumalı)
-	go func(sID, msg string) {
-		if a.Memory == nil {
-			return
-		}
-		sqlStore, ok := a.Memory.(*memory.SQLiteStore)
-		if !ok {
-			return
-		}
-		memCtx, memCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer memCancel()
-		_ = sqlStore.AddChatMessage(memCtx, sID, "user", msg)
-	}(sess.ID, input)
+	writeChatMessageAsync(a.Memory, sess.ID, kernel.RoleUser, input)
 
-	// 🧠 PLAN OLUŞTURMA
 	planCtx := context.WithValue(sessCtx, "stream_chan", nil)
-	plan, err := a.generatePlan(planCtx, input)
+	plan, planErr := a.generatePlan(planCtx, input)
 
-	if err == nil && !strings.Contains(plan, "NO_PLAN_NEEDED") && plan != "" {
-		sess.mu.Lock()
-		sess.Plan = plan
-		sess.mu.Unlock()
+	isChatMode := isChatModePlan(plan)
 
+	if containsTaskKeywords(input) {
+		if isChatMode {
+			logger.Info("🔧 [%s] Task keyword tespit edildi, CHAT MODE kararı eziliyor → TASK MODE FORCE!", sess.ID)
+		} else {
+			logger.Debug("🔧 [%s] Task keyword tespit edildi, task mode onaylandı.", sess.ID)
+		}
+		isChatMode = false
+	}
+
+	sess.mu.Lock()
+	sess.Plan = plan
+	sess.mu.Unlock()
+
+	if !isChatMode && planErr == nil && plan != "" {
 		logger.Success("📝 [%s] Harekât Planı:\n%s", sess.ID, plan)
-		logger.Info("🚀 Plan onayı LLM'e bırakıldı.")
 	}
 
 	a.refreshSystemPrompt(sess)
 
-	// 🛡️ Zamanlayıcı Sızıntısını (Timer Leak) Önleme
 	stepTimer := time.NewTimer(time.Second)
 	defer stepTimer.Stop()
 
 	maxSteps := a.MaxSteps
-	if maxSteps == 0 {
+	if maxSteps <= 0 {
 		maxSteps = DefaultMaxSteps
 	}
 
-	// 🔄 ANA YAPAY ZEKA DÖNGÜSÜ
-	for i := 0; i < maxSteps; i++ {
+	logger.Info("🔄 [Execution] Ana döngü başlatılıyor, maksimum %d adım", maxSteps)
+	for step := 0; step < maxSteps; step++ {
 		stepTimer.Reset(time.Second)
 
 		select {
 		case <-sessCtx.Done():
-			// 🆕 YENİ: Session iptal edildiğinde task status güncelle
 			a.updateTaskStatus(sess.ID, heartbeat.TaskStatusFailed)
 			return fmt.Sprintf("🛑 [%s] İşlem iptal edildi.", sess.ID), nil
 		case <-stepTimer.C:
 		}
 
 		a.manageContextWindow(sess)
-		tools := a.Skills.ListTools()
+
+		if a.Skills == nil || a.Brain == nil {
+			a.updateTaskStatus(sess.ID, heartbeat.TaskStatusFailed)
+			return "", fmt.Errorf("core engine uninitialized")
+		}
 
 		sess.mu.Lock()
 		currentHistory := make([]kernel.Message, len(sess.History))
 		copy(currentHistory, sess.History)
 		sess.mu.Unlock()
 
-		// 🚨 DÜZELTME #2: Nil check ekle
-		if a.Brain == nil {
-			return "", fmt.Errorf("beyin motoru başlatılmadı")
+		var chatTools []kernel.Tool
+		if !isChatMode {
+			chatTools = a.Skills.ListTools()
 		}
 
-		resp, err := a.Brain.Chat(sessCtx, currentHistory, tools)
+		resp, err := a.Brain.Chat(sessCtx, currentHistory, chatTools)
+		
+		// 🔥 OLLAMA 500 CRASH RECOVERY (HATA AMORTİSÖRÜ) 🔥
+		if err != nil && (strings.Contains(err.Error(), "500") || strings.Contains(err.Error(), "invalid character") || strings.Contains(err.Error(), "parse JSON")) {
+			logger.Warn("⚠️ [%s] LLM Native Tool motoru çöktü (Ollama 500 Hatası). Native araçlar gizlenerek düz metin (Fallback) modunda tekrar deneniyor...", sess.ID)
+			// Araçları 'nil' göndererek Ollama'yı düz metin (text-only) üretmeye zorluyoruz!
+			resp, err = a.Brain.Chat(sessCtx, currentHistory, nil)
+		}
+
 		if err != nil {
-			// 🆕 YENİ: Hata durumunda task status güncelle
+			if sessCtx.Err() != nil {
+				return fmt.Sprintf("🛑 [%s] Görev kullanıcı tarafından sonlandırıldı.", sess.ID), nil
+			}
 			a.updateTaskStatus(sess.ID, heartbeat.TaskStatusFailed)
-			return "", fmt.Errorf("beyin hatası: %v", err)
+			return "", fmt.Errorf("brain chat hatası: %w", err)
 		}
 
-		// 🚨 DÜZELTME #3: Thread-safe BrainResponse erişimi
-		if len(resp.GetToolCalls()) == 0 {
-			a.checkAndParseToolFallback(resp, i)
+		toolCalls := resp.GetToolCalls()
+		content := resp.GetContent()
+
+		if !isChatMode && len(toolCalls) == 0 {
+			a.checkAndParseToolFallback(resp, step)
+			toolCalls = resp.GetToolCalls()
+
+			if len(toolCalls) == 0 && content != "" {
+				extracted := extractToolCallsFromText(content)
+				if len(extracted) > 0 {
+					logger.Info("🚑 [Execution] Regex Fallback Başarılı: %d tool call kurtarıldı!", len(extracted))
+					toolCalls = extracted
+				}
+			}
 		}
 
-		// 🚨 DÜZELTME #4: Thread-safe Content ve ToolCalls okuma
 		sess.mu.Lock()
 		sess.History = append(sess.History, kernel.Message{
-			Role:      "assistant",
-			Content:   resp.GetContent(),
-			ToolCalls: resp.GetToolCalls(),
+			Role:      kernel.RoleAssistant,
+			Content:   content,
+			ToolCalls: toolCalls,
 		})
 		a.trimHistory(sess)
 		sess.mu.Unlock()
 
-		// 🚨 DÜZELTME #5: Thread-safe Content okuma
-		if resp.GetContent() != "" {
-			go func(sID, msg string) {
-				if a.Memory == nil {
-					return
-				}
-				sqlStore, ok := a.Memory.(*memory.SQLiteStore)
-				if !ok {
-					return
-				}
-				memCtx, memCancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer memCancel()
-				_ = sqlStore.AddChatMessage(memCtx, sID, "assistant", msg)
-			}(sess.ID, resp.GetContent())
+		if content != "" {
+			writeChatMessageAsync(a.Memory, sess.ID, kernel.RoleAssistant, content)
 		}
 
-		// 🚨 DÜZELTME #6: Thread-safe ToolCalls kontrolü
-		if len(resp.GetToolCalls()) == 0 && resp.GetContent() != "" {
-			// 🆕 YENİ: Görev tamamlandı, task status güncelle
-			return a.finalizeTask(sess, input, resp.GetContent())
+		if len(toolCalls) > 0 && isChatMode {
+			isChatMode = false
 		}
 
-		// 🛠️ ASENKRON ARAÇ ÇALIŞTIRMA MOTORU
-		// Büyük projeleri tarayabilmesi için 30 sn yerine 3 Dakika zaman aşımı verdik!
-		toolCtx, toolCancel := context.WithTimeout(sessCtx, 3*time.Minute)
+		if isChatMode {
+			return a.finalizeTask(sess, input, content)
+		}
 
+		if len(toolCalls) == 0 {
+			if step == 0 {
+				logger.Warn("⚠️ [%s] Task mode ilk adımında tool tetiklenmedi! Uyarı gönderiliyor.", sess.ID)
+				
+				if content != "" {
+					logger.Debug("🔄 [%s] Modele aracı tetiklemesi için zorunlu komut gönderiliyor...", sess.ID)
+					
+					sess.mu.Lock()
+					sess.History = append(sess.History, kernel.Message{
+						Role:    kernel.RoleUser,
+						Content: "SİSTEM EMRİ: Görev planını yaptın veya açıklama yazdın, ancak HİÇBİR ARACI TETİKLEMEDİN! Lütfen işlemi yapmak için DERHAL '[Native Tool Call: arac_adi({\"parametre\": \"deger\"})]' formatını kullanarak aracı çağır. Başka hiçbir açıklama yazma.",
+					})
+					a.trimHistory(sess)
+					sess.mu.Unlock()
+					
+					continue // Döngüyü başa sar ve aracı çağırmasını sağla
+				}
+				continue
+			} else {
+				// EĞER STEP > 0 İSE: Model zaten daha önce araç kullandı, sonucunu aldı 
+				// ve şimdi bize final özetini yazdı. Bırakalım görevi bitirsin!
+				logger.Info("🎯 [%s] Task mode - Araçlar kullanıldı ve görev final metni ile başarıyla bitiriliyor.", sess.ID)
+				
+				if content == "" {
+					content = "Görev başarıyla tamamlandı."
+				}
+				return a.finalizeTask(sess, input, content)
+			}
+		}
+
+		toolCtx, toolCancel := context.WithTimeout(sessCtx, ToolExecTimeout)
 		var wg sync.WaitGroup
 		sem := make(chan struct{}, MaxParallelTools)
-
-		var toolResultsMu sync.Mutex
+		var resultsMu sync.Mutex
 		var toolResults []kernel.Message
 
-		// 🚨 DÜZELTME #7: ToolCalls'ı bir kez al, döngüde kullan (thread-safe)
-		toolCalls := resp.GetToolCalls()
-		
-		for _, call := range toolCalls {
+		for i, call := range toolCalls {
 			if call.Function == "" {
 				continue
 			}
-
 			wg.Add(1)
-			go func(c kernel.ToolCall) {
+			go func(c kernel.ToolCall, idx int) {
 				defer wg.Done()
-
 				select {
 				case sem <- struct{}{}:
 				case <-toolCtx.Done():
 					return
+				case <-sessCtx.Done():
+					return
 				}
 				defer func() { <-sem }()
+
+				if toolCtx.Err() != nil || sessCtx.Err() != nil {
+					return
+				}
 
 				logger.Action("⚡ [%s] Tool: %s", sess.ID, c.Function)
 				output, toolErr := a.executeToolSafe(toolCtx, c)
 
 				var toolImages []string
 				if toolErr == nil {
-					var parsed map[string]interface{}
-					if err := json.Unmarshal([]byte(output), &parsed); err == nil {
-						if path, ok := parsed["image_path"].(string); ok {
-							// 5MB Limit Koruması
-							if info, err := os.Stat(path); err == nil && info.Size() < 5*1024*1024 {
-								if imgData, err := os.ReadFile(path); err == nil {
-									b64 := base64.StdEncoding.EncodeToString(imgData)
-									toolImages = append(toolImages, b64)
-								}
-							}
-						}
-					}
+					toolImages = extractImagesFromOutput(output)
 				} else {
 					output = fmt.Sprintf("❌ HATA: %v\nAraç başarısız oldu.", toolErr)
 				}
 
-				// Sonuçları güvenle topla
-				toolResultsMu.Lock()
+				resultsMu.Lock()
 				toolResults = append(toolResults, kernel.Message{
-					Role:       "tool",
+					Role:       kernel.RoleTool,
 					Content:    output,
 					Name:       c.Function,
 					ToolCallID: c.ID,
 					Images:     toolImages,
 				})
-				toolResultsMu.Unlock()
-			}(call)
+				resultsMu.Unlock()
+			}(call, i+1)
 		}
 
-		// Tool'ların bitmesini veya timeout olmasını bekle
 		done := make(chan struct{})
 		go func() {
 			wg.Wait()
@@ -277,69 +355,65 @@ func (a *Pars) Run(ctx context.Context, input string, images []string) (string, 
 		select {
 		case <-done:
 		case <-toolCtx.Done():
-			logger.Warn("⏰ [%s] Araç çalıştırma süresi aşıldı (Timeout)", sess.ID)
+		case <-sessCtx.Done():
 		}
 		toolCancel()
 
-		// Toplanan sonuçları hafızaya ekle
-		sess.mu.Lock()
-		sess.History = append(sess.History, toolResults...)
-		a.trimHistory(sess)
-		sess.mu.Unlock()
+		if len(toolResults) > 0 {
+			sess.mu.Lock()
+			sess.History = append(sess.History, toolResults...)
+			a.trimHistory(sess)
+			sess.mu.Unlock()
+		}
 	}
 
-	// 🆕 YENİ: Döngü limiti aşıldığında task status güncelle
 	a.updateTaskStatus(sess.ID, heartbeat.TaskStatusFailed)
-	return fmt.Sprintf("🛑 [%s] Döngü limiti aşıldı.", sess.ID), nil
+	return fmt.Sprintf("🛑 [%s] Maksimum adım limiti aşıldı (%d).", sess.ID, maxSteps), nil
 }
 
-// 🆕 YENİ: updateTaskStatus - Heartbeat üzerinden task status güncelle
+func extractImagesFromOutput(output string) []string {
+	var images []string
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(output), &parsed); err != nil {
+		return images
+	}
+	if path, ok := parsed["image_path"].(string); ok && path != "" {
+		if info, err := os.Stat(path); err == nil && info.Size() < 5*1024*1024 {
+			if imgData, err := os.ReadFile(path); err == nil {
+				images = append(images, base64.StdEncoding.EncodeToString(imgData))
+			}
+		}
+	}
+	return images
+}
+
 func (a *Pars) updateTaskStatus(sessionID string, status heartbeat.TaskStatus) {
 	if a == nil {
 		return
 	}
-
-	// Session ID'den task type belirle
 	taskType := getTaskTypeFromSessionID(sessionID)
-
-	// Sadece Agent görevleri için status güncelle (User görevleri heartbeat tarafından yönetilir)
 	if taskType == heartbeat.TaskTypeAgent {
-		logger.Debug("🔄 [TaskStatus] Agent görev durumu güncelleniyor: %s -> %s", sessionID, status)
-		// Not: Heartbeat servisine erişim için runner.go'dan referans gerekebilir
-		// Şimdilik log ile takip ediyoruz, future enhancement olarak heartbeat entegrasyonu eklenebilir
+		logger.Debug("🔄 [TaskStatus] Agent görev: %s -> %s", sessionID, status)
 	}
 }
 
-// trimHistory, mesaj sınırını korurken Sistem Mesajını güvenle muhafaza eder.
 func (a *Pars) trimHistory(sess *Session) {
-	// 🚨 DÜZELTME #8: Nil check ekle
-	if sess == nil {
+	if a == nil || sess == nil || len(sess.History) <= MaxHistoryMessages {
 		return
 	}
 
-	if len(sess.History) <= MaxHistoryMessages {
-		return
-	}
-
-	hasSystem := len(sess.History) > 0 && sess.History[0].Role == "system"
+	hasSystem := len(sess.History) > 0 && sess.History[0].Role == kernel.RoleSystem
 	keepCount := MaxHistoryMessages
 
 	if hasSystem {
-		// Sistem mesajını al, aradakileri at, son (keepCount-1) mesajı al
 		sysMsg := sess.History[0]
-		
-		// 🚨 DÜZELTME #9: Slice bounds hatasını önle
 		startIdx := len(sess.History) - (keepCount - 1)
 		if startIdx < 1 {
 			startIdx = 1
 		}
-		
-		tailMsgs := sess.History[startIdx:]
-		
 		newHistory := make([]kernel.Message, 0, keepCount)
 		newHistory = append(newHistory, sysMsg)
-		newHistory = append(newHistory, tailMsgs...)
-		
+		newHistory = append(newHistory, sess.History[startIdx:]...)
 		sess.History = newHistory
 	} else {
 		sess.History = sess.History[len(sess.History)-keepCount:]
@@ -350,80 +424,74 @@ func (a *Pars) executeToolSafe(ctx context.Context, call kernel.ToolCall) (outpu
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("panic: %v", r)
-			logger.Error("💥 Tool Crash (%s): %v", call.Function, r)
 		}
 	}()
 
-	// 🚨 DÜZELTME #10: Nil check ekle
-	if a.Skills == nil {
-		return "", fmt.Errorf("skills engine uninitialized")
+	if a == nil || a.Skills == nil {
+		return "", fmt.Errorf("engine uninitialized")
 	}
 
 	tool, err := a.Skills.GetTool(call.Function)
 	if err != nil {
-		return "", fmt.Errorf("'%s' tool bulunamadı", call.Function)
+		return "", fmt.Errorf("tool '%s' bulunamadı: %w", call.Function, err)
 	}
 
-	return tool.Execute(ctx, call.Arguments)
+	output, err = tool.Execute(ctx, call.Arguments)
+	return output, err
 }
 
 func (a *Pars) finalizeTask(sess *Session, input, output string) (string, error) {
-	// 🚨 DÜZELTME #11: Nil check ekle
-	if sess == nil {
+	if a == nil || sess == nil {
 		return "", fmt.Errorf("session nil")
 	}
 
-	logger.Debug("🎯 [%s] Görev tamamlandı.", sess.ID)
-
-	// 🚨 DÜZELTME #12: Thread-safe Plan okuma
 	sess.mu.Lock()
 	plan := sess.Plan
 	sess.mu.Unlock()
 
-	// 🆕 YENİ: Task tamamlandı, status güncelle
 	a.updateTaskStatus(sess.ID, heartbeat.TaskStatusCompleted)
 
-	memoryContent := fmt.Sprintf("GÖREV: %s\nPLAN: %s\nSONUÇ: %s", input, plan, output)
+	var finalOutput string
+	if output == "" {
+		finalOutput = fmt.Sprintf("[Görev ID: %s]\n%s", sess.ID, input)
+	} else {
+		memoryContent := fmt.Sprintf("GÖREV: %s\nPLAN: %s\nSONUÇ: %s", input, plan, output)
+		go func() {
+			if a.Memory != nil {
+				memCtx, memCancel := context.WithTimeout(context.Background(), MemoryWriteTimeout)
+				defer memCancel()
+				_ = a.Memory.Add(memCtx, memoryContent, nil)
+			}
+		}()
+		finalOutput = fmt.Sprintf("[Görev ID: %s]\n%s", sess.ID, output)
+	}
 
-	go func() {
-		if a.Memory == nil {
-			return
-		}
-		memCtx, memCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer memCancel()
-		
-		if err := a.Memory.Add(memCtx, memoryContent, nil); err != nil {
-			logger.Error("❌ Memory write failed: %v", err)
-		}
-	}()
-
-	finalOutput := fmt.Sprintf("[Görev ID: %s]\n%s", sess.ID, output)
 	return finalOutput, nil
 }
 
 func (a *Pars) CancelSession(sessionID string) {
+	if a == nil {
+		return
+	}
+
 	a.sessMu.RLock()
-	sess, exists := a.Sessions[sessionID]
+	sess, exists := a.sessions[sessionID]
 	a.sessMu.RUnlock()
 
-	if exists && sess.Cancel != nil {
-		logger.Warn("💀 KILL SWITCH: %s", sessionID)
-		
-		// 🆕 YENİ: İptal edildiğinde task status güncelle
+	if exists && sess != nil {
 		a.updateTaskStatus(sessionID, heartbeat.TaskStatusFailed)
-		
-		// Çift çağrıyı (Double-call) engelle
+
 		sess.mu.Lock()
 		cancelFunc := sess.Cancel
 		sess.Cancel = nil
 		sess.mu.Unlock()
-		
+
 		if cancelFunc != nil {
 			cancelFunc()
 		}
-		
+
 		a.sessMu.Lock()
-		delete(a.Sessions, sessionID)
+		delete(a.sessions, sessionID)
 		a.sessMu.Unlock()
 	}
 }

@@ -14,9 +14,6 @@ import (
 	"github.com/shirou/gopsutil/v3/process"
 )
 
-// =====================================================================
-// 🌐 NETWORK & PRIVACY (Zehirli Ağ Radarı ve Mahremiyet Kalkanı)
-// =====================================================================
 type NetworkPrivacy struct {
 	EventChan       chan<- string
 	ctx             context.Context
@@ -39,11 +36,7 @@ func NewNetworkPrivacy(eventChan chan<- string) *NetworkPrivacy {
 
 func (n *NetworkPrivacy) Start() {
 	logger.Success("🛡️ [SECURITY] Zehirli Ağ Radarı ve Mahremiyet Kalkanı Aktif!")
-
-	// Sistemin ilk anındaki açık (masum) portları hafızaya al
 	n.takePortSnapshot()
-
-	// Sensörleri (Asenkron) başlat
 	go n.watchSuspiciousPorts()
 	go n.watchHardwarePrivacy()
 }
@@ -61,9 +54,6 @@ func (n *NetworkPrivacy) sendAlert(msg string) {
 	}
 }
 
-// ---------------------------------------------------------------------
-// 🕸️ 1. ZEHİRLİ AĞ VE PORT RADARI
-// ---------------------------------------------------------------------
 func (n *NetworkPrivacy) takePortSnapshot() {
 	conns, err := net.Connections("tcp")
 	if err == nil {
@@ -78,8 +68,6 @@ func (n *NetworkPrivacy) takePortSnapshot() {
 func (n *NetworkPrivacy) watchSuspiciousPorts() {
 	ticker := time.NewTicker(20 * time.Second)
 	defer ticker.Stop()
-
-	// Hackerların arka kapı (Backdoor) ve C2 sunucuları için sık kullandığı tehlikeli portlar
 	badPorts := map[uint32]string{
 		4444:  "Metasploit Default Listener",
 		31337: "BackOrifice / Elite Hacker Port",
@@ -103,8 +91,6 @@ func (n *NetworkPrivacy) watchSuspiciousPorts() {
 				}
 
 				port := c.Laddr.Port
-
-				// 1. Durum: Bilinen Zararlı Port Açıldıysa
 				if desc, isBad := badPorts[port]; isBad {
 					n.mu.RLock()
 					alreadyAlerted := n.alertedBadPorts[port]
@@ -121,9 +107,6 @@ func (n *NetworkPrivacy) watchSuspiciousPorts() {
 						n.mu.Unlock()
 					}
 				}
-
-				// 2. Durum: Başlangıçta olmayan yepyeni bir "Dinleyen" (LISTEN) port açıldıysa (İsteğe bağlı gelişmiş analiz)
-				// Not: Bunu çok sıkı tutarsak yeni açılan her uygulamada uyarır. Şimdilik sadece tehlikelilere odaklandık.
 			}
 		}
 	}
@@ -141,11 +124,8 @@ func (n *NetworkPrivacy) getProcessName(pid int32) string {
 	return name
 }
 
-// ---------------------------------------------------------------------
-// 👁️ 2. MAHREMİYET KALKANI (Kamera & Mikrofon Gözcüsü)
-// ---------------------------------------------------------------------
 func (n *NetworkPrivacy) watchHardwarePrivacy() {
-	ticker := time.NewTicker(5 * time.Second) // Mahremiyet çok hızlı denetlenmeli
+	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
 	for {
@@ -154,27 +134,20 @@ func (n *NetworkPrivacy) watchHardwarePrivacy() {
 			return
 		case <-ticker.C:
 			if runtime.GOOS == "linux" {
-				// Linux'ta kamera aygıtını (/dev/video0) kimin kullandığını kontrol eder
 				cmd := exec.CommandContext(n.ctx, "fuser", "/dev/video0")
 				out, err := cmd.Output()
-				
-				// Eğer fuser bir çıktı verirse (PID listesi), kamera MÜHÜRLENMİŞ (kullanımda) demektir!
 				if err == nil && len(strings.TrimSpace(string(out))) > 0 {
 					pids := strings.Fields(string(out))
 					if len(pids) > 0 {
 						msg := fmt.Sprintf("[SİBER GÜVENLİK BİLDİRİMİ] [WARN]: 👁️ DİKKAT! KAMERA AKTİF! Bir uygulama (PID: %s) şu an kameranı kullanıyor. Eğer görüntülü konuşmada değilsen gizliliğin ihlal ediliyor olabilir!", pids[0])
 						n.sendAlert(msg)
-						time.Sleep(10 * time.Minute) // Sürekli darlamamak için uyu
+						time.Sleep(10 * time.Minute) 
 					}
 				}
 			} else if runtime.GOOS == "windows" {
-				// Windows'ta kamera kullanımını Registry üzerinden takip ederiz
-				// (Enterprise EDR sistemleri API Hooking yapar, bu en güvenli komut satırı alternatifidir)
 				psCmd := `Get-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\webcam\NonPackaged" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty LastUsedTimeStop`
 				cmd := exec.CommandContext(n.ctx, "powershell", "-NoProfile", "-Command", psCmd)
 				out, _ := cmd.Output()
-				
-				// Eğer çıktı "0" ise kamera şu an AKTİF kullanılıyor demektir.
 				if strings.TrimSpace(string(out)) == "0" {
 					n.sendAlert("[SİBER GÜVENLİK BİLDİRİMİ] [WARN]: 👁️ DİKKAT! KAMERA AKTİF! Arka planda bir Windows uygulaması şu an kameranı kullanıyor!")
 					time.Sleep(10 * time.Minute)

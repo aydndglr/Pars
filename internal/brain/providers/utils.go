@@ -1,4 +1,3 @@
-// internal/brain/providers/utils.go
 package providers
 
 import (
@@ -6,7 +5,6 @@ import (
 	"path/filepath"
 )
 
-// resolveMediaPath: Verilen dosya adını/yolunu proje dizinindeki "media" klasöründe arar.
 func resolveMediaPath(inputPath string) string {
 	cwd, err := os.Getwd()
 	if err != nil {
